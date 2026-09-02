@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U friendmap -d friendmap"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -20,6 +25,42 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://friendmap:friendmap@postgres:5432/friendmap
+      JWT_SECRET: docker-compose-development-secret
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3000
+    ports:
+      - "3000:3000"
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3000
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: http://localhost:3000
+    ports:
+      - "8080:80"
 
 volumes:
   postgres_data:

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -8,11 +10,13 @@ import { FriendshipsModule } from './friendships/friendships.module';
 import { UsersModule } from './users/users.module';
 import { SharingModule } from './sharing/sharing.module';
 import { LocationModule } from './location/location.module';
+import { HttpThrottlerGuard } from './throttling/http-throttler.guard';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     EventEmitterModule.forRoot(),
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
     UsersModule,
     AuthModule,
     FriendshipsModule,
@@ -20,6 +24,12 @@ import { LocationModule } from './location/location.module';
     LocationModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: HttpThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

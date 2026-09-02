@@ -21,11 +21,22 @@ import {
 
 type AuthenticatedSocket = Socket & { data: { userId?: string } };
 type JwtPayload = { sub: string };
+const LOCATION_UPDATE_INTERVAL_MS = 4_000;
 
-@WebSocketGateway()
+@WebSocketGateway({
+  cors: {
+    origin: [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:8080',
+    ],
+    credentials: true,
+  },
+})
 export class LocationGateway {
   @WebSocketServer()
   private server!: Server;
+  private readonly lastLocationUpdateByUser = new Map<string, number>();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -33,6 +44,17 @@ export class LocationGateway {
     private readonly redis: RedisService,
     private readonly visibility: VisibilityService,
   ) {}
+
+  private isLocationUpdateRateLimited(userId: string) {
+    const now = Date.now();
+    const lastUpdate = this.lastLocationUpdateByUser.get(userId);
+    if (lastUpdate !== undefined && now - lastUpdate < LOCATION_UPDATE_INTERVAL_MS) {
+      return true;
+    }
+
+    this.lastLocationUpdateByUser.set(userId, now);
+    return false;
+  }
 
   async handleConnection(socket: AuthenticatedSocket) {
     const token = socket.handshake.auth?.token;
@@ -56,6 +78,11 @@ export class LocationGateway {
     @MessageBody() payload: UpdateLocationDto,
   ) {
     const userId = socket.data.userId as string;
+    if (this.isLocationUpdateRateLimited(userId)) {
+      socket.emit('location:rejected', { reason: 'rate-limited' });
+      return;
+    }
+
     const previous = await this.redis.getCurrentLocation(userId);
     const result = validateIncomingPoint(previous, payload);
     if (!result.valid) {

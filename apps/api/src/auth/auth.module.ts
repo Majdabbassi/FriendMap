@@ -10,7 +10,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 @Module({
   imports: [
     UsersModule,
-    PassportModule,
+    PassportModule.register({}),
     JwtModule.registerAsync({
       useFactory: () => {
         const secret = process.env.JWT_SECRET;
@@ -26,6 +26,6 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, JwtAuthGuard],
-  exports: [AuthService, JwtAuthGuard, JwtModule],
+  exports: [AuthService, JwtAuthGuard, JwtModule, PassportModule],
 })
 export class AuthModule {}
