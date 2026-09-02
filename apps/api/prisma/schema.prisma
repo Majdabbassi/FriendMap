@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum SharingMode {
+  GHOST
+  EVERYONE
+  SELECTED
+  EXCEPT_SELECTED
+}
+
+enum SharingListType {
+  SELECTED
+  EXCEPT
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  sharingSettings SharingSettings?
+
+  sentRequests     Friendship[] @relation("Requester")
+  receivedRequests Friendship[] @relation("Addressee")
+
+  listEntriesOwned  SharingListEntry[] @relation("Owner")
+  listEntriesAsFriend SharingListEntry[] @relation("FriendRef")
+}
+
+model Friendship {
+  id           String            @id @default(uuid())
+  requesterId  String
+  addresseeId  String
+  status       FriendshipStatus  @default(PENDING)
+  createdAt    DateTime          @default(now())
+
+  requester User @relation("Requester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("Addressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+}
+
+model SharingSettings {
+  id        String      @id @default(uuid())
+  userId    String      @unique
+  mode      SharingMode @default(EVERYONE)
+  updatedAt DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SharingListEntry {
+  id        String          @id @default(uuid())
+  ownerId   String
+  friendId  String
+  listType  SharingListType
+  createdAt DateTime        @default(now())
+
+  owner  User @relation("Owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  friend User @relation("FriendRef", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, friendId, listType])
+}
