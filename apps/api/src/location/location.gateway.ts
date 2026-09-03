@@ -13,6 +13,8 @@ import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { VisibilityService } from '../sharing/visibility.service';
+import { LocationHistoryService } from './location-history.service';
+import { StopViewingDto } from './dto/stop-viewing.dto';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import {
   filterAuthorizedViewers,
@@ -20,9 +22,11 @@ import {
   validateIncomingPoint,
 } from './location.service';
 
-type AuthenticatedSocket = Socket & { data: { userId?: string } };
+type AuthenticatedSocket = Socket & {
+  data: { userId?: string; stoppedViewingFriendIds?: Set<string> };
+};
 type JwtPayload = { sub: string };
-const LOCATION_UPDATE_INTERVAL_MS = 4_000;
+const LOCATION_UPDATE_INTERVAL_MS = 5_000;
 
 @WebSocketGateway({
   cors: {
@@ -45,6 +49,7 @@ export class LocationGateway {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly visibility: VisibilityService,
+    private readonly history: LocationHistoryService,
   ) {}
 
   private isLocationUpdateRateLimited(userId: string) {
@@ -94,13 +99,18 @@ export class LocationGateway {
     }
 
     await this.redis.setCurrentLocation(userId, payload);
-    this.server.to(`location:${userId}`).emit('location:update', {
-      userId,
-      lat: payload.lat,
-      lng: payload.lng,
-      accuracy: payload.accuracy,
-      updatedAt: payload.timestamp,
-    });
+    await this.history.enqueueIfSampled(userId, payload);
+    const viewers = await this.server.in(`location:${userId}`).fetchSockets();
+    for (const viewer of viewers) {
+      if (viewer.data.stoppedViewingFriendIds?.has(userId)) continue;
+      viewer.emit('location:update', {
+        userId,
+        lat: payload.lat,
+        lng: payload.lng,
+        accuracy: payload.accuracy,
+        updatedAt: payload.timestamp,
+      });
+    }
   }
 
   @SubscribeMessage('view:friends')
@@ -119,6 +129,7 @@ export class LocationGateway {
     );
     const authorizedFriendIds: string[] = [];
     for (const friendId of friendIds) {
+      if (socket.data.stoppedViewingFriendIds?.has(friendId)) continue;
       if (await this.visibility.canView(userId, friendId)) {
         authorizedFriendIds.push(friendId);
         await socket.join(`location:${friendId}`);
@@ -146,10 +157,13 @@ export class LocationGateway {
   }
 
   @SubscribeMessage('view:stop')
+  @UsePipes(new ValidationPipe())
   async stopViewing(
     @ConnectedSocket() socket: AuthenticatedSocket,
-    @MessageBody() payload: { friendId: string },
+    @MessageBody() payload: StopViewingDto,
   ) {
+    socket.data.stoppedViewingFriendIds ??= new Set<string>();
+    socket.data.stoppedViewingFriendIds.add(payload.friendId);
     await socket.leave(`location:${payload.friendId}`);
   }
 
@@ -216,6 +230,7 @@ export class LocationGateway {
     for (const friendId of authorizedFriendIds) {
       const sockets = await this.server.in(`user:${friendId}`).fetchSockets();
       for (const socket of sockets) {
+        if (socket.data.stoppedViewingFriendIds?.has(targetId)) continue;
         if (!socket.rooms.has(room)) await socket.join(room);
         socket.emit('location:update', {
           userId: targetId,

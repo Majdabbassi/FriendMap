@@ -24,7 +24,7 @@ export class SharingService {
       where: { userId },
     });
 
-    return { mode: settings?.mode ?? SharingMode.EVERYONE };
+    return { mode: settings?.mode ?? SharingMode.GHOST };
   }
 
   async updateSettings(userId: string, dto: UpdateSharingSettingsDto) {

@@ -38,6 +38,8 @@ model User {
 
   listEntriesOwned  SharingListEntry[] @relation("Owner")
   listEntriesAsFriend SharingListEntry[] @relation("FriendRef")
+
+  locationHistory LocationHistoryPoint[]
 }
 
 model Friendship {
@@ -73,4 +75,20 @@ model SharingListEntry {
   friend User @relation("FriendRef", fields: [friendId], references: [id], onDelete: Cascade)
 
   @@unique([ownerId, friendId, listType])
+}
+
+model LocationHistoryPoint {
+  id         String   @id @default(uuid())
+  userId     String
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  recordedAt DateTime
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recordedAt])
+  @@index([expiresAt])
 }

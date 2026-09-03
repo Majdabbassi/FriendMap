@@ -6,6 +6,8 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { RedisModule } from '../redis/redis.module';
 import { SharingModule } from '../sharing/sharing.module';
 import { LocationGateway } from './location.gateway';
+import { LocationController } from './location.controller';
+import { LocationHistoryService } from './location-history.service';
 
 @Module({
   imports: [
@@ -16,6 +18,7 @@ import { LocationGateway } from './location.gateway';
     SharingModule,
     EventEmitterModule,
   ],
-  providers: [LocationGateway],
+  controllers: [LocationController],
+  providers: [LocationGateway, LocationHistoryService],
 })
 export class LocationModule {}

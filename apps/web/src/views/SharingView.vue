@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { apiRequest, type Friendship, type SharingMode, type User } from '../api'
 
 const modes: SharingMode[] = ['EVERYONE', 'SELECTED', 'EXCEPT_SELECTED', 'GHOST']
-const mode = ref<SharingMode>('EVERYONE')
+const mode = ref<SharingMode>('GHOST')
 const friends = ref<Friendship[]>([])
 const selected = ref(new Set<string>())
 const error = ref('')
