@@ -31,7 +31,7 @@ export class VisibilityService {
     const settings = await this.prisma.sharingSettings.findUnique({
       where: { userId: targetId },
     });
-    const mode = settings?.mode ?? SharingMode.EVERYONE;
+    const mode = settings?.mode ?? SharingMode.GHOST;
 
     if (mode === SharingMode.GHOST) {
       return false;

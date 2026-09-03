@@ -36,7 +36,39 @@ describe('FriendshipsService through Nest DI', () => {
 
     await expect(
       service.request('user-a', { targetEmail: 'b@example.com' }),
-    ).rejects.toThrow(ConflictException);
+    ).rejects.toThrow('You are already friends with this user');
     expect(prisma.friendship.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a duplicate pending request with a distinct message', async () => {
+    const prisma = {
+      friendship: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            requesterId: 'user-a',
+            addresseeId: 'user-b',
+            status: FriendshipStatus.PENDING,
+          },
+        ]),
+      },
+    };
+    const usersService = {
+      findByEmail: jest.fn().mockResolvedValue({ id: 'user-b' }),
+    };
+    const eventEmitter = { emit: jest.fn() };
+
+    const module = await Test.createTestingModule({
+      providers: [
+        FriendshipsService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: UsersService, useValue: usersService },
+        { provide: EventEmitter2, useValue: eventEmitter },
+      ],
+    }).compile();
+    const service = module.get(FriendshipsService);
+
+    await expect(
+      service.request('user-a', { targetEmail: 'b@example.com' }),
+    ).rejects.toThrow('Friend request already pending');
   });
 });

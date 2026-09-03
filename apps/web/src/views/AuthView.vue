@@ -7,6 +7,7 @@ const auth = useAuthStore()
 const router = useRouter()
 const mode = ref<'login' | 'register'>('login')
 const email = ref('')
+const identifier = ref('')
 const username = ref('')
 const password = ref('password123')
 const error = ref('')
@@ -17,7 +18,7 @@ async function submit() {
   error.value = ''
   try {
     await auth.authenticate(`/auth/${mode.value}`, mode.value === 'login'
-      ? { email: email.value, password: password.value }
+      ? { identifier: identifier.value, password: password.value }
       : { email: email.value, username: username.value, password: password.value })
     router.push('/map')
   } catch (err) { error.value = err instanceof Error ? err.message : 'Request failed' }
@@ -31,7 +32,8 @@ async function submit() {
     <form class="panel auth-card" @submit.prevent="submit">
       <div class="tabs"><button type="button" :class="{ selected: mode === 'login' }" @click="mode = 'login'">Log in</button><button type="button" :class="{ selected: mode === 'register' }" @click="mode = 'register'">Register</button></div>
       <h2>{{ mode === 'login' ? 'Welcome back' : 'Create your account' }}</h2>
-      <label>Email<input v-model="email" type="email" required autocomplete="email" placeholder="you@example.com" /></label>
+      <label v-if="mode === 'login'">Email or username<input v-model="identifier" type="text" required autocomplete="username" placeholder="you@example.com or your_name" /></label>
+      <label v-else>Email<input v-model="email" type="email" required autocomplete="email" placeholder="you@example.com" /></label>
       <label v-if="mode === 'register'">Username<input v-model="username" required minlength="3" placeholder="your_name" /></label>
       <label>Password<input v-model="password" type="password" required minlength="8" autocomplete="current-password" /></label>
       <p v-if="error" class="error">{{ error }}</p>

@@ -21,6 +21,7 @@ function logout() {
         <RouterLink to="/friends" :class="{ active: route.path === '/friends' }">Friends</RouterLink>
         <RouterLink to="/sharing" :class="{ active: route.path === '/sharing' }">Sharing</RouterLink>
       </nav>
+      <span class="identity">Logged in as: {{ auth.username }}</span>
       <button class="button subtle" @click="logout">Log out</button>
     </header>
     <main :class="{ 'with-nav': auth.isAuthenticated }"><RouterView /></main>

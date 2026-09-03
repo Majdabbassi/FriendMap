@@ -4,9 +4,9 @@ services:
     container_name: friendmap-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: friendmap
-      POSTGRES_PASSWORD: friendmap
-      POSTGRES_DB: friendmap
+      POSTGRES_USER: ${POSTGRES_USER:-friendmap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-friendmap}
+      POSTGRES_DB: ${POSTGRES_DB:-friendmap}
     ports:
       - "5432:5432"
     volumes:
@@ -41,11 +41,11 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://friendmap:friendmap@postgres:5432/friendmap
-      JWT_SECRET: docker-compose-development-secret
+      DATABASE_URL: postgresql://${POSTGRES_USER:-friendmap}:${POSTGRES_PASSWORD:-friendmap}@postgres:5432/${POSTGRES_DB:-friendmap}
+      JWT_SECRET: ${JWT_SECRET:-docker-compose-development-secret}
       REDIS_HOST: redis
-      REDIS_PORT: 6379
-      PORT: 3000
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      PORT: ${PORT:-3000}
     ports:
       - "3000:3000"
 
@@ -54,11 +54,11 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: http://localhost:3000
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     depends_on:
       - api
     environment:
-      VITE_API_URL: http://localhost:3000
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     ports:
       - "8080:80"
 

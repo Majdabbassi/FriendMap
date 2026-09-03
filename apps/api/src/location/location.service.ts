@@ -47,6 +47,19 @@ export async function filterUnauthorizedViewers(
   return results.filter(({ allowed }) => !allowed).map(({ viewerId }) => viewerId);
 }
 
+export async function filterAuthorizedViewers(
+  viewerIds: string[],
+  canView: (viewerId: string) => Promise<boolean>,
+): Promise<string[]> {
+  const results = await Promise.all(
+    viewerIds.map(async (viewerId) => ({
+      viewerId,
+      allowed: await canView(viewerId),
+    })),
+  );
+  return results.filter(({ allowed }) => allowed).map(({ viewerId }) => viewerId);
+}
+
 function haversineKm(first: StoredPoint, second: StoredPoint) {
   const earthRadiusKm = 6371;
   const latDelta = toRadians(second.lat - first.lat);

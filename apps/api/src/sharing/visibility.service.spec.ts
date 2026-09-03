@@ -43,6 +43,13 @@ describe('VisibilityService', () => {
     expect(prisma.sharingListEntry.findUnique).not.toHaveBeenCalled();
   });
 
+  it('defaults to GHOST when sharing settings are missing', async () => {
+    prisma.sharingSettings.findUnique.mockResolvedValue(null);
+
+    await expect(service.canView(viewerId, targetId)).resolves.toBe(false);
+    expect(prisma.sharingListEntry.findUnique).not.toHaveBeenCalled();
+  });
+
   it('allows SELECTED only when the viewer is selected', async () => {
     prisma.sharingSettings.findUnique.mockResolvedValue({
       mode: SharingMode.SELECTED,

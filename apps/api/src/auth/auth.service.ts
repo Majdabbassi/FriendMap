@@ -28,7 +28,7 @@ export class AuthService {
   async register(dto: RegisterDto) {
     const existing = await this.usersService.findByEmail(dto.email);
     if (existing) {
-      throw new ConflictException('Email already exists');
+      throw new ConflictException('Email already in use');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
@@ -39,23 +39,25 @@ export class AuthService {
         username: dto.username,
         passwordHash,
       });
-      return this.signToken(user.id, user.email);
+      return this.signToken(user.id, user.email, user.username);
     } catch (error) {
       if (isUniqueConstraintError(error)) {
         const target = (error as { meta?: { target?: string[] | string } })
           .meta?.target;
         const fields = Array.isArray(target) ? target : target ? [target] : [];
         if (fields.includes('username')) {
-          throw new ConflictException('Username already exists');
+          throw new ConflictException('Username already taken');
         }
-        throw new ConflictException('Email already exists');
+        throw new ConflictException('Email already in use');
       }
       throw error;
     }
   }
 
   async login(dto: LoginDto) {
-    const user = await this.usersService.findByEmail(dto.email);
+    const user =
+      (await this.usersService.findByEmail(dto.identifier)) ??
+      (await this.usersService.findByUsername(dto.identifier));
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -68,13 +70,14 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    return this.signToken(user.id, user.email);
+    return this.signToken(user.id, user.email, user.username);
   }
 
-  private async signToken(userId: string, email: string) {
+  private async signToken(userId: string, email: string, username: string) {
     const access_token = await this.jwtService.signAsync({
       sub: userId,
       email,
+      username,
     });
     return { access_token };
   }

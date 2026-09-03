@@ -15,6 +15,7 @@ import { RedisService } from '../redis/redis.service';
 import { VisibilityService } from '../sharing/visibility.service';
 import { UpdateLocationDto } from './dto/update-location.dto';
 import {
+  filterAuthorizedViewers,
   filterUnauthorizedViewers,
   validateIncomingPoint,
 } from './location.service';
@@ -29,6 +30,7 @@ const LOCATION_UPDATE_INTERVAL_MS = 4_000;
       'http://localhost:5173',
       'http://127.0.0.1:5173',
       'http://localhost:8080',
+      'http://127.0.0.1:8080',
     ],
     credentials: true,
   },
@@ -66,6 +68,7 @@ export class LocationGateway {
     try {
       const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
       socket.data.userId = payload.sub;
+      await socket.join(`user:${payload.sub}`);
     } catch {
       socket.disconnect(true);
     }
@@ -152,12 +155,18 @@ export class LocationGateway {
 
   @OnEvent('sharing.mode-changed')
   onSharingModeChanged(event: { userId: string }) {
-    return this.revokeUnauthorizedViewers(event.userId);
+    return Promise.all([
+      this.revokeUnauthorizedViewers(event.userId),
+      this.grantNewlyAuthorizedViewers(event.userId),
+    ]);
   }
 
   @OnEvent('sharing.list-changed')
   onSharingListChanged(event: { ownerId: string }) {
-    return this.revokeUnauthorizedViewers(event.ownerId);
+    return Promise.all([
+      this.revokeUnauthorizedViewers(event.ownerId),
+      this.grantNewlyAuthorizedViewers(event.ownerId),
+    ]);
   }
 
   @OnEvent('friendship.removed')
@@ -180,6 +189,41 @@ export class LocationGateway {
       if (unauthorizedIds.includes(socket.data.userId as string)) {
         await socket.leave(room);
         socket.emit('location:hidden', { userId: targetId });
+      }
+    }
+  }
+
+  private async grantNewlyAuthorizedViewers(targetId: string) {
+    const friendships = await this.prisma.friendship.findMany({
+      where: {
+        status: FriendshipStatus.ACCEPTED,
+        OR: [{ requesterId: targetId }, { addresseeId: targetId }],
+      },
+    });
+    const friendIds = friendships.map((friendship) =>
+      friendship.requesterId === targetId
+        ? friendship.addresseeId
+        : friendship.requesterId,
+    );
+    const authorizedFriendIds = await filterAuthorizedViewers(
+      friendIds,
+      (friendId) => this.visibility.canView(friendId, targetId),
+    );
+    const location = await this.redis.getCurrentLocation(targetId);
+    if (!location) return;
+
+    const room = `location:${targetId}`;
+    for (const friendId of authorizedFriendIds) {
+      const sockets = await this.server.in(`user:${friendId}`).fetchSockets();
+      for (const socket of sockets) {
+        if (!socket.rooms.has(room)) await socket.join(room);
+        socket.emit('location:update', {
+          userId: targetId,
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: location.accuracy,
+          updatedAt: location.timestamp,
+        });
       }
     }
   }

@@ -52,7 +52,16 @@ export class FriendshipsService {
     );
 
     if (hasBlockingFriendship(existing, userId, target.id)) {
-      throw new ConflictException('Friendship already exists');
+      const blockingFriendship = existing.find(
+        (row) =>
+          row.status === FriendshipStatus.PENDING ||
+          row.status === FriendshipStatus.ACCEPTED,
+      );
+      const message =
+        blockingFriendship?.status === FriendshipStatus.PENDING
+          ? 'Friend request already pending'
+          : 'You are already friends with this user';
+      throw new ConflictException(message);
     }
 
     const includeAddressee = {

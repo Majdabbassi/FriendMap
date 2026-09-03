@@ -1,7 +1,7 @@
 FROM node:24.12-alpine AS build
 
 WORKDIR /app
-COPY package*.json ./
+COPY package*.json .npmrc ./
 RUN npm ci --legacy-peer-deps
 
 COPY prisma.config.ts nest-cli.json tsconfig*.json ./

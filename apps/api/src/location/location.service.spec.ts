@@ -1,4 +1,5 @@
 import {
+  filterAuthorizedViewers,
   filterUnauthorizedViewers,
   validateIncomingPoint,
 } from './location.service';
@@ -70,5 +71,15 @@ describe('filterUnauthorizedViewers', () => {
         viewerId === 'allowed',
       ),
     ).resolves.toEqual(['blocked']);
+  });
+});
+
+describe('filterAuthorizedViewers', () => {
+  it('returns only viewers that can now view', async () => {
+    await expect(
+      filterAuthorizedViewers(['allowed', 'blocked'], async (viewerId) =>
+        viewerId === 'allowed',
+      ),
+    ).resolves.toEqual(['allowed']);
   });
 });
