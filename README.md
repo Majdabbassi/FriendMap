@@ -124,4 +124,4 @@ Unit tests cover the visibility/authorization logic (`VisibilityService`, all 4 
 
 ## Walkthrough
 
-[Loom link here]
+Watch the [Loom walkthrough](https://www.loom.com/share/9f81f4a086174129a44bb644c7677327) to see the app in action.
