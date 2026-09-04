@@ -14,6 +14,24 @@ type Point = {
   updatedAt: number
 }
 
+type MarkerClusterInternal = {
+  _zoom?: number
+  _childClusters?: L.MarkerCluster[]
+}
+
+type MarkerClusterGroupInternal = {
+  _inZoomAnimation: number
+  _spiderfied: L.MarkerCluster | null
+}
+
+function markerClusterInternal(cluster: L.MarkerCluster): L.MarkerCluster & MarkerClusterInternal {
+  return cluster as L.MarkerCluster & MarkerClusterInternal
+}
+
+function clusterGroupInternal(group: L.MarkerClusterGroup): L.MarkerClusterGroup & MarkerClusterGroupInternal {
+  return group as L.MarkerClusterGroup & MarkerClusterGroupInternal
+}
+
 const mapElement = ref<HTMLElement | null>(null)
 
 const notice = ref('')
@@ -30,6 +48,7 @@ const selectedFriendId = ref<string | null>(null)
 const points = new Map<string, Point>()
 const markers = new Map<string, L.Marker>()
 const stoppedViewing = new Set<string>()
+const markerUserIds = new WeakMap<L.Marker, string>()
 
 let map: L.Map | undefined
 let markerCluster: L.MarkerClusterGroup | undefined
@@ -78,11 +97,12 @@ function colorForUser(userId: string): string {
   for (let i = 0; i < userId.length; i++) {
     hash = (hash * 31 + userId.charCodeAt(i)) >>> 0
   }
-  return FRIEND_COLORS[hash % FRIEND_COLORS.length]
+  return FRIEND_COLORS[hash % FRIEND_COLORS.length]!
 }
 
 function userIdForMarker(marker: L.Marker): string | undefined {
-  if ((marker as any)._userId) return (marker as any)._userId
+  const stored = markerUserIds.get(marker)
+  if (stored) return stored
   for (const [uid, m] of markers.entries()) {
     if (m === marker) return uid
   }
@@ -173,7 +193,7 @@ function clusterIcon(
   /* Collect unique friends in this cluster */
   const userIds: string[] = []
   for (const m of childMarkers) {
-    const uid = (m as any)._userId || userIdForMarker(m)
+    const uid = userIdForMarker(m)
     if (uid && !userIds.includes(uid)) {
       userIds.push(uid)
     }
@@ -190,18 +210,22 @@ function clusterIcon(
   const remainingCount = count > 3 ? count - 3 : 0
 
   /* Tooltip text showing friend names on hover */
+  const first = friendsInfo[0]!
+  const second = friendsInfo[1]!
+  const third = friendsInfo[2]!
+
   let tooltipText = ''
   if (friendsInfo.length >= 3) {
     if (count === 3) {
-      tooltipText = `${friendsInfo[0].name}, ${friendsInfo[1].name} & ${friendsInfo[2].name}`
+      tooltipText = `${first.name}, ${second.name} & ${third.name}`
     } else {
       const more = count - 3
-      tooltipText = `${friendsInfo[0].name}, ${friendsInfo[1].name}, ${friendsInfo[2].name} +${more} more`
+      tooltipText = `${first.name}, ${second.name}, ${third.name} +${more} more`
     }
   } else if (friendsInfo.length === 2) {
-    tooltipText = count > 2 ? `${friendsInfo[0].name}, ${friendsInfo[1].name} +${count - 2}` : `${friendsInfo[0].name} & ${friendsInfo[1].name}`
+    tooltipText = count > 2 ? `${first.name}, ${second.name} +${count - 2}` : `${first.name} & ${second.name}`
   } else if (friendsInfo.length === 1) {
-    tooltipText = count > 1 ? `${friendsInfo[0].name} & ${count - 1} other` : friendsInfo[0].name
+    tooltipText = count > 1 ? `${first.name} & ${count - 1} other` : first.name
   } else {
     tooltipText = `${count} friends`
   }
@@ -272,7 +296,6 @@ function updateMarker(point: Point): void {
   const existingMarker = markers.get(point.userId)
 
   if (existingMarker) {
-    ;(existingMarker as any)._userId = point.userId
     existingMarker
       .setLatLng([point.lat, point.lng])
       .setIcon(markerFor(point))
@@ -287,7 +310,7 @@ function updateMarker(point: Point): void {
       icon: markerFor(point),
     },
   )
-  ;(newMarker as any)._userId = point.userId
+  markerUserIds.set(newMarker, point.userId)
 
 
   newMarker.on('click', () => {
@@ -356,6 +379,7 @@ function stopViewing(userId: string): void {
 
   if (marker) {
     markerCluster?.removeLayer(marker)
+    markerUserIds.delete(marker)
   }
 
   markers.delete(userId)
@@ -602,12 +626,12 @@ onMounted(async () => {
 
         /* 1 ▸ if individual markers are already visible on the map, avatars are showing */
         const anyVisible = childMarkers.some(
-          (m) => (m as any)._icon && map!.hasLayer(m),
+          (m) => m.getElement() !== undefined && map!.hasLayer(m),
         )
         if (anyVisible) return
 
         /* 2 ▸ wait until Leaflet.markercluster internal zoom animation is fully finished */
-        if ((markerCluster as any)._inZoomAnimation > 0) {
+        if (clusterGroupInternal(markerCluster)._inZoomAnimation > 0) {
           if (++tries < maxTries) {
             setTimeout(checkAndOpen, 50)
           }
@@ -616,13 +640,9 @@ onMounted(async () => {
 
         /* 3 ▸ find visible parent cluster and spiderfy it to show all avatars */
         for (const marker of childMarkers) {
-          const parent = (markerCluster as any).getVisibleParent(marker)
-          if (
-            parent &&
-            parent !== marker &&
-            typeof parent.spiderfy === 'function'
-          ) {
-            if ((markerCluster as any)._spiderfied === parent) {
+          const parent = markerCluster.getVisibleParent(marker)
+          if (parent && parent !== marker && parent instanceof L.MarkerCluster) {
+            if (clusterGroupInternal(markerCluster)._spiderfied === parent) {
               return
             }
             parent.spiderfy()
@@ -639,9 +659,9 @@ onMounted(async () => {
     }
 
 
-    markerCluster.on('clusterclick', (e: any) => {
-      const cluster = e.layer
-      const clusterEl = cluster._icon as HTMLElement | undefined
+    markerCluster.on('clusterclick', (event: L.LeafletEvent) => {
+      const cluster = (event as unknown as { layer: L.MarkerCluster }).layer
+      const clusterEl = cluster.getElement()
       const childMarkers: L.Marker[] = cluster.getAllChildMarkers()
 
       /* 1 ▸ play the pop + ripple CSS animation */
@@ -657,15 +677,18 @@ onMounted(async () => {
         const currentZoom = map.getZoom()
 
         /* calculate target zoom */
-        const clusterZoom: number = cluster._zoom ?? currentZoom
+        const clusterZoom: number = markerClusterInternal(cluster)._zoom ?? currentZoom
         let targetZoom = clusterZoom + 1
         const boundsZoom = map.getBoundsZoom(cluster.getBounds())
 
-        let kids = (cluster._childClusters || []).slice()
+        let kids = (markerClusterInternal(cluster)._childClusters ?? []).slice()
         while (kids.length > 0 && boundsZoom > targetZoom) {
           targetZoom++
-          let next: any[] = []
-          for (const c of kids) next = next.concat(c._childClusters || [])
+          const next: L.MarkerCluster[] = []
+          for (const c of kids) {
+            const childClusters = markerClusterInternal(c)._childClusters
+            if (childClusters) next.push(...childClusters)
+          }
           kids = next
         }
 
