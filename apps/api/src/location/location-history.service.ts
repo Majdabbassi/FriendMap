@@ -6,17 +6,12 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  HistoryQueuePoint,
-  RedisService,
-} from '../redis/redis.service';
+import { RedisService } from '../redis/redis.service';
 import { randomUUID } from 'node:crypto';
 
 const HISTORY_RETENTION_MS = 24 * 60 * 60 * 1000;
 const HISTORY_SAMPLE_INTERVAL_MS = 30_000;
 const HISTORY_DISTANCE_METERS = 25;
-const HISTORY_BATCH_SIZE = 250;
-const HISTORY_WORKER_INTERVAL_MS = 1_000;
 const HISTORY_CLEANUP_INTERVAL_MS = 15 * 60_000;
 
 type AcceptedPoint = {
@@ -29,10 +24,7 @@ type AcceptedPoint = {
 @Injectable()
 export class LocationHistoryService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LocationHistoryService.name);
-  private worker?: ReturnType<typeof setInterval>;
-  private draining = false;
-  private lastCleanupAt = 0;
-  private readonly workerId = randomUUID();
+  private cleanupWorker?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -40,11 +32,14 @@ export class LocationHistoryService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    this.worker = setInterval(() => void this.flushQueue(), HISTORY_WORKER_INTERVAL_MS);
+    this.cleanupWorker = setInterval(
+      () => void this.cleanupExpired(),
+      HISTORY_CLEANUP_INTERVAL_MS,
+    );
   }
 
   onModuleDestroy() {
-    if (this.worker) clearInterval(this.worker);
+    if (this.cleanupWorker) clearInterval(this.cleanupWorker);
   }
 
   async enqueueIfSampled(userId: string, point: AcceptedPoint) {
@@ -56,15 +51,22 @@ export class LocationHistoryService implements OnModuleInit, OnModuleDestroy {
       lng: point.lng,
       timestamp: point.timestamp,
     });
-    await this.redis.enqueueHistoryPoint({
-      id: randomUUID(),
-      userId,
-      lat: point.lat,
-      lng: point.lng,
-      accuracy: point.accuracy ?? 0,
-      timestamp: point.timestamp,
-      expiresAt: Date.now() + HISTORY_RETENTION_MS,
-    });
+
+    try {
+      await this.prisma.locationHistoryPoint.create({
+        data: {
+          id: randomUUID(),
+          userId,
+          lat: point.lat,
+          lng: point.lng,
+          accuracy: point.accuracy,
+          recordedAt: new Date(point.timestamp),
+          expiresAt: new Date(Date.now() + HISTORY_RETENTION_MS),
+        },
+      });
+    } catch (error) {
+      this.logger.error('Failed to write location history point', error);
+    }
   }
 
   async getHistory(userId: string, from?: Date, to?: Date) {
@@ -89,46 +91,21 @@ export class LocationHistoryService implements OnModuleInit, OnModuleDestroy {
     return { from: new Date(start), to: new Date(end), points };
   }
 
+  private async cleanupExpired() {
+    try {
+      await this.prisma.locationHistoryPoint.deleteMany({
+        where: { expiresAt: { lt: new Date() } },
+      });
+    } catch (error) {
+      this.logger.error('Failed to clean up expired location history points', error);
+    }
+  }
+
   private shouldSample(checkpoint: { lat: number; lng: number; timestamp: number }, point: AcceptedPoint) {
     return (
       point.timestamp - checkpoint.timestamp >= HISTORY_SAMPLE_INTERVAL_MS ||
       this.distanceMeters(checkpoint.lat, checkpoint.lng, point.lat, point.lng) >= HISTORY_DISTANCE_METERS
     );
-  }
-
-  private async flushQueue() {
-    if (this.draining) return;
-    if (!(await this.redis.acquireHistoryFlushLock(this.workerId))) return;
-    this.draining = true;
-    try {
-      const points = await this.redis.peekHistoryPoints(HISTORY_BATCH_SIZE);
-      if (points.length) {
-        await this.prisma.locationHistoryPoint.createMany({
-          data: points.map((point) => ({
-            id: point.id,
-            userId: point.userId,
-            lat: point.lat,
-            lng: point.lng,
-            accuracy: point.accuracy,
-            recordedAt: new Date(point.timestamp),
-            expiresAt: new Date(point.expiresAt),
-          })),
-          skipDuplicates: true,
-        });
-        await this.redis.removeHistoryPoints(points.length);
-      }
-      if (Date.now() - this.lastCleanupAt >= HISTORY_CLEANUP_INTERVAL_MS) {
-        await this.prisma.locationHistoryPoint.deleteMany({
-          where: { expiresAt: { lt: new Date() } },
-        });
-        this.lastCleanupAt = Date.now();
-      }
-    } catch (error) {
-      this.logger.error('Failed to flush location history queue', error);
-    } finally {
-      this.draining = false;
-      await this.redis.releaseHistoryFlushLock(this.workerId);
-    }
   }
 
   private distanceMeters(firstLat: number, firstLng: number, secondLat: number, secondLng: number) {

@@ -61,20 +61,6 @@ describe('isDuplicateFriendRequest (mocked Prisma)', () => {
     );
   });
 
-  it('is not a duplicate when Prisma returns only REJECTED', async () => {
-    prisma.friendship.findMany.mockResolvedValue([
-      {
-        requesterId: userA,
-        addresseeId: userB,
-        status: FriendshipStatus.REJECTED,
-      },
-    ]);
-
-    await expect(isDuplicateFriendRequest(prisma, userA, userB)).resolves.toBe(
-      false,
-    );
-  });
-
   it('is not a duplicate when Prisma returns no rows', async () => {
     prisma.friendship.findMany.mockResolvedValue([]);
 

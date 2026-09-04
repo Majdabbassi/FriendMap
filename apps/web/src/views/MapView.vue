@@ -25,6 +25,7 @@ let map: L.Map | undefined
 let markerCluster: L.MarkerClusterGroup | undefined
 let socket: Socket | undefined
 let watchId: number | undefined
+let lastEmitTime = 0
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 let clock: ReturnType<typeof setInterval> | undefined
 let historyLine: L.Polyline | undefined
@@ -169,8 +170,6 @@ function startLocationWatch(): void {
     showNotice('Geolocation is not available in this browser.')
     return
   }
-
-  let lastEmitTime = 0
 
   watchId = navigator.geolocation.watchPosition(
     (position) => {

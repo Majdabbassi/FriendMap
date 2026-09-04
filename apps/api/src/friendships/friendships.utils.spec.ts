@@ -62,22 +62,6 @@ describe('hasBlockingFriendship', () => {
     ).toBe(true);
   });
 
-  it('returns false for a REJECTED friendship (re-request is allowed)', () => {
-    expect(
-      hasBlockingFriendship(
-        [
-          {
-            requesterId: userA,
-            addresseeId: userB,
-            status: FriendshipStatus.REJECTED,
-          },
-        ],
-        userA,
-        userB,
-      ),
-    ).toBe(false);
-  });
-
   it('ignores friendships with a different user', () => {
     expect(
       hasBlockingFriendship(
@@ -99,10 +83,6 @@ describe('isBlockingFriendshipStatus', () => {
   it('treats PENDING and ACCEPTED as blocking', () => {
     expect(isBlockingFriendshipStatus(FriendshipStatus.PENDING)).toBe(true);
     expect(isBlockingFriendshipStatus(FriendshipStatus.ACCEPTED)).toBe(true);
-  });
-
-  it('does not treat REJECTED as blocking', () => {
-    expect(isBlockingFriendshipStatus(FriendshipStatus.REJECTED)).toBe(false);
   });
 });
 

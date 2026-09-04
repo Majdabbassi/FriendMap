@@ -64,30 +64,14 @@ export class FriendshipsService {
       throw new ConflictException(message);
     }
 
-    const includeAddressee = {
-      addressee: { select: publicUserSelect },
-    };
-
-    const sameDirectionRejected = existing.find(
-      (row) =>
-        row.requesterId === userId &&
-        row.addresseeId === target.id &&
-        row.status === FriendshipStatus.REJECTED,
-    );
-    if (sameDirectionRejected) {
-      return this.prisma.friendship.update({
-        where: { id: sameDirectionRejected.id },
-        data: { status: FriendshipStatus.PENDING },
-        include: includeAddressee,
-      });
-    }
-
     return this.prisma.friendship.create({
       data: {
         requesterId: userId,
         addresseeId: target.id,
       },
-      include: includeAddressee,
+      include: {
+        addressee: { select: publicUserSelect },
+      },
     });
   }
 

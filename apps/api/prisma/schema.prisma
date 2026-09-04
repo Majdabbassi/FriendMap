@@ -9,7 +9,6 @@ datasource db {
 enum FriendshipStatus {
   PENDING
   ACCEPTED
-  REJECTED
 }
 
 enum SharingMode {
