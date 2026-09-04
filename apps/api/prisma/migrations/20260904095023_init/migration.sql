@@ -1,5 +1,5 @@
 -- CreateEnum
-CREATE TYPE "FriendshipStatus" AS ENUM ('PENDING', 'ACCEPTED', 'REJECTED');
+CREATE TYPE "FriendshipStatus" AS ENUM ('PENDING', 'ACCEPTED');
 
 -- CreateEnum
 CREATE TYPE "SharingMode" AS ENUM ('GHOST', 'EVERYONE', 'SELECTED', 'EXCEPT_SELECTED');
