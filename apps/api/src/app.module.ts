@@ -11,6 +11,7 @@ import { FriendshipsModule } from './friendships/friendships.module';
 import { UsersModule } from './users/users.module';
 import { SharingModule } from './sharing/sharing.module';
 import { LocationModule } from './location/location.module';
+import { SeedModule } from './seed/seed.module';
 import { HttpThrottlerGuard } from './throttling/http-throttler.guard';
 
 @Module({
@@ -23,6 +24,7 @@ import { HttpThrottlerGuard } from './throttling/http-throttler.guard';
     FriendshipsModule,
     SharingModule,
     LocationModule,
+    SeedModule,
   ],
   controllers: [AppController],
   providers: [

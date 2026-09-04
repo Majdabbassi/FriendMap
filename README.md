@@ -20,12 +20,15 @@ Once running:
 - Web app: http://localhost:8080
 - API: http://localhost:3000
 
-To seed 5 demo users with a realistic friend graph and all four sharing modes represented:
+5 demo users are **seeded automatically on every API startup**, so `docker compose up` is all you need — no manual seed step. The demo data (users, friend graph, sharing modes/settings, location history) is **reset to a clean baseline on each boot**, while any users/data you add yourself are left untouched.
+
+Demo accounts: `alice`, `bob`, `carol`, `dave`, `erin` @ `friendmap.dev`, password `password123` for all — see `apps/api/src/seed/seed-on-startup.service.ts` for the full relationship/settings map.
+
+To wipe everything (including your own data) and start fresh:
 ```bash
-cd apps/api
-npx prisma db seed
+docker compose down -v && docker compose up --build
 ```
-(Demo accounts: `alice`, `bob`, `carol`, `dave`, `erin` @ `friendmap.dev`, password `password123` for all — see seed script for the full relationship/settings map.)
+(`-v` removes the Postgres volume; without it, `up` re-runs the migration + auto-seed.)
 
 ### Local development (without Docker)
 Each app can also run locally against the Dockerized Postgres/Redis (their ports are exposed to the host):
