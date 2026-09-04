@@ -80,7 +80,7 @@ Unfriending deletes the friendship and any list entries between that pair, in bo
 - Visibility is checked on connect and re-checked on mode change, list change, and unfriend — both revoking viewers who lost access and granting ones who gained it, in under \~2s.
 - Incoming GPS points are rejected if >30s in the future, >5min stale, out of order, or imply >500km/h since the last point.
 - Client throttles to stay under the server's 5s rate limit per user.
-- Location history: each accepted point is checked against a Redis checkpoint (kept if ≥30s or ≥25m since the last kept point) and written directly to Postgres with a 24h TTL. A 15-minute interval purges expired rows.
+- Location history: each accepted point is checked against a Redis checkpoint (kept if ≥30s or ≥25m since the last kept point) and written to PostgreSQL and automatically purged after 24 hours by a scheduled cleanup job.
 
 ## Scaling to 100k users
 
