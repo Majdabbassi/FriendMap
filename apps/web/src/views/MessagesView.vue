@@ -18,10 +18,15 @@ const auth = useAuthStore()
 const presence = usePresenceStore()
 
 const conversations = ref<Conversation[]>([])
+const friends = ref<Friendship[]>([])
 const activeFriendId = ref<string | null>(null)
 const messages = ref<ChatMessage[]>([])
 const draft = ref('')
 const threadEl = ref<HTMLElement | null>(null)
+const searchInput = ref<HTMLInputElement | null>(null)
+
+const showFriendPicker = ref(false)
+const friendSearch = ref('')
 
 const connection = ref('connecting')
 const viewError = ref('')
@@ -43,6 +48,27 @@ const friendMeta = new Map<string, { username: string; email: string }>()
 const activeConversation = computed(() =>
   conversations.value.find((c) => c.friendId === activeFriendId.value),
 )
+
+const activeFriendName = computed(
+  () =>
+    activeConversation.value?.friendUsername ??
+    (activeFriendId.value
+      ? friendMeta.get(activeFriendId.value)?.username ?? 'Unknown'
+      : ''),
+)
+
+const pickerFriends = computed(() => {
+  const query = friendSearch.value.trim().toLowerCase()
+  const inConversation = new Set(conversations.value.map((c) => c.friendId))
+  return friends.value.filter((item) => {
+    if (inConversation.has(item.friend.id)) return false
+    if (!query) return true
+    return (
+      item.friend.username.toLowerCase().includes(query) ||
+      item.friend.email.toLowerCase().includes(query)
+    )
+  })
+})
 
 function otherPartyId(message: ChatMessage): string {
   return message.senderId === auth.userId ? message.recipientId : message.senderId
@@ -198,6 +224,29 @@ async function openConversation(friendId: string): Promise<void> {
 
 
 /* =========================================================
+   NEW CONVERSATION
+   ========================================================= */
+
+function openFriendPicker(): void {
+  friendSearch.value = ''
+  showFriendPicker.value = true
+  void nextTick(() => searchInput.value?.focus())
+}
+
+function closeFriendPicker(): void {
+  showFriendPicker.value = false
+}
+
+function startConversation(friendId: string): void {
+  closeFriendPicker()
+  if (!conversations.value.some((c) => c.friendId === friendId)) {
+    ensureConversation(friendId, 0)
+  }
+  void openConversation(friendId)
+}
+
+
+/* =========================================================
    SENDING
    ========================================================= */
 
@@ -222,7 +271,12 @@ function connectSocket(): void {
     connection.value = 'live'
     socket?.emit('presence:snapshot')
     void loadConversations().then(() => {
-      if (activeFriendId.value) void openConversation(activeFriendId.value)
+      if (activeFriendId.value) {
+        if (!conversations.value.some((c) => c.friendId === activeFriendId.value)) {
+          ensureConversation(activeFriendId.value, 0)
+        }
+        void openConversation(activeFriendId.value)
+      }
     })
   })
 
@@ -248,6 +302,7 @@ function connectSocket(): void {
 async function loadFriendsMeta(): Promise<void> {
   try {
     const friendships = await apiRequest<Friendship[]>('/friendships')
+    friends.value = friendships
     for (const item of friendships) {
       friendMeta.set(item.friend.id, {
         username: item.friend.username,
@@ -292,10 +347,26 @@ onBeforeUnmount(() => {
 
     <div class="messages-layout">
       <aside class="panel conversations-panel">
-        <h2>Conversations</h2>
+        <div class="conversations-head">
+          <h2>Conversations</h2>
+          <button
+            class="button subtle small"
+            type="button"
+            @click="openFriendPicker"
+          >
+            + New
+          </button>
+        </div>
 
         <div v-if="!conversations.length" class="empty">
-          No conversations yet. Message a friend and it will show up here.
+          <p>No conversations yet.</p>
+          <button
+            class="button secondary small empty-cta"
+            type="button"
+            @click="openFriendPicker"
+          >
+            Message a friend
+          </button>
         </div>
 
         <div
@@ -342,7 +413,7 @@ onBeforeUnmount(() => {
         <template v-if="activeFriendId">
           <div class="thread-header">
             <div class="conversation-avatar">
-              {{ activeConversation?.friendUsername.charAt(0).toUpperCase() }}
+              {{ activeFriendName.charAt(0).toUpperCase() }}
               <i
                 class="presence-dot"
                 :class="presence.isOnline(activeFriendId) ? 'online' : 'offline'"
@@ -350,7 +421,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="conversation-info">
               <span class="conversation-name">
-                {{ activeConversation?.friendUsername }}
+                {{ activeFriendName }}
               </span>
               <span class="conversation-preview">
                 {{
@@ -399,7 +470,7 @@ onBeforeUnmount(() => {
             <button
               class="button primary"
               type="submit"
-              :disabled="!draft.trim()"
+              :disabled="!draft.trim() || connection !== 'live'"
             >
               Send
             </button>
@@ -407,9 +478,78 @@ onBeforeUnmount(() => {
         </template>
 
         <div v-else class="empty thread-placeholder">
-          Select a conversation to start chatting.
+          <p>Select a conversation to start chatting.</p>
+          <button
+            class="button primary empty-cta"
+            type="button"
+            @click="openFriendPicker"
+          >
+            Message a friend
+          </button>
         </div>
       </section>
+    </div>
+
+    <div
+      v-if="showFriendPicker"
+      class="modal-backdrop"
+      @click.self="closeFriendPicker"
+    >
+      <div class="modal">
+        <div class="modal-head">
+          <h2>New message</h2>
+          <button
+            class="friend-card-close"
+            type="button"
+            aria-label="Close friend picker"
+            @click="closeFriendPicker"
+          >
+            ×
+          </button>
+        </div>
+
+        <input
+          ref="searchInput"
+          v-model="friendSearch"
+          class="friend-search"
+          type="text"
+          placeholder="Search friends…"
+          autocomplete="off"
+          @keydown.esc="closeFriendPicker"
+        />
+
+        <div class="picker-list">
+          <div v-if="!pickerFriends.length" class="empty">
+            {{
+              friends.length
+                ? 'No friends to message — everyone is already in a conversation.'
+                : 'No friends yet — add friends from the Friends page first.'
+            }}
+          </div>
+
+          <div
+            v-for="item in pickerFriends"
+            :key="item.id"
+            class="list-row picker-row"
+            role="button"
+            tabindex="0"
+            @click="startConversation(item.friend.id)"
+            @keydown.enter="startConversation(item.friend.id)"
+          >
+            <div class="conversation-avatar">
+              {{ item.friend.username.charAt(0).toUpperCase() }}
+              <i
+                class="presence-dot"
+                :class="presence.isOnline(item.friend.id) ? 'online' : 'offline'"
+              ></i>
+            </div>
+            <div>
+              <strong>{{ item.friend.username }}</strong>
+              <small>{{ item.friend.email }}</small>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div v-if="socketError" class="toast chat-toast">
