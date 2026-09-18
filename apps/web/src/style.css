@@ -2371,3 +2371,185 @@ input:focus {
 
   outline-offset: -2px;
 }
+
+
+/* =========================================================
+   NAV UNREAD BADGE + GLOBAL NEW-MESSAGE TOAST
+   ========================================================= */
+
+.nav-badge {
+  display: inline-block;
+
+  min-width: 18px;
+
+  margin-left: var(--space-1);
+
+  padding: 1px 6px;
+
+  border-radius: 999px;
+
+  background: var(--color-primary);
+
+  color: #fff;
+
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+
+  text-align: center;
+
+  vertical-align: 1px;
+}
+
+.app-toast {
+  position: fixed;
+
+  top: auto;
+  right: var(--space-6);
+  bottom: var(--space-6);
+
+  z-index: 950;
+
+  display: flex;
+  flex-direction: column;
+
+  gap: 2px;
+
+  max-width: 320px;
+
+  padding: var(--space-3) var(--space-4);
+
+  font: inherit;
+
+  text-align: left;
+
+  background: rgba(255, 255, 255, 0.97);
+
+  border: 1px solid var(--color-border);
+
+  border-radius: var(--radius-lg);
+
+  box-shadow: var(--shadow-lg);
+
+  cursor: pointer;
+}
+
+.app-toast-label {
+  color: var(--color-primary);
+
+  font-size: 10px;
+  font-weight: 700;
+
+  text-transform: uppercase;
+
+  letter-spacing: 0.04em;
+}
+
+.app-toast-text {
+  color: var(--color-text);
+
+  font-size: 13px;
+  line-height: 1.4;
+
+  overflow: hidden;
+
+  display: -webkit-box;
+
+  -webkit-box-orient: vertical;
+
+  -webkit-line-clamp: 2;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition:
+    opacity var(--transition-normal),
+    transform var(--transition-normal);
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+
+  transform: translateY(10px);
+}
+
+
+/* =========================================================
+   IMAGE MESSAGES
+   ========================================================= */
+
+.message-image {
+  display: block;
+
+  max-width: 280px;
+  max-height: 240px;
+
+  margin-bottom: var(--space-2);
+
+  border-radius: var(--radius-md);
+
+  object-fit: cover;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.attach-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0 var(--space-3);
+
+  color: var(--color-text-muted);
+}
+
+.attach-button svg {
+  display: block;
+}
+
+.attach-button:disabled {
+  cursor: not-allowed;
+}
+
+.image-chip {
+  display: flex;
+  align-items: center;
+
+  gap: var(--space-2);
+
+  max-width: 100%;
+
+  padding: var(--space-2);
+
+  background: var(--color-background-accent);
+
+  border: 1px solid var(--color-border);
+
+  border-radius: var(--radius-md);
+}
+
+.image-chip-thumb {
+  width: 40px;
+  height: 40px;
+
+  object-fit: cover;
+
+  border-radius: var(--radius-sm);
+}
+
+.image-chip-name {
+  flex: 1;
+
+  color: var(--color-text-muted);
+
+  font-size: 12px;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+}

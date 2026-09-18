@@ -13,9 +13,16 @@ import {
 } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { usePresenceStore } from '../stores/presence'
+import {
+  CHAT_IMAGE_TYPES,
+  MAX_IMAGE_BYTES,
+  dataUrlImageData,
+  useChatStore,
+} from '../stores/chat'
 
 const auth = useAuthStore()
 const presence = usePresenceStore()
+const chat = useChatStore()
 
 const conversations = ref<Conversation[]>([])
 const friends = ref<Friendship[]>([])
@@ -24,6 +31,9 @@ const messages = ref<ChatMessage[]>([])
 const draft = ref('')
 const threadEl = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
+
+const imagePending = ref<{ contentType: string; dataUrl: string; name: string } | null>(null)
 
 const showFriendPicker = ref(false)
 const friendSearch = ref('')
@@ -83,6 +93,16 @@ function formatChatTime(iso: string): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+function conversationPreview(message: ChatMessage | null): string {
+  if (!message) return 'No messages yet'
+  const base = message.body ?? (message.imageContentType ? '📷 Photo' : '')
+  return `${message.senderId === auth.userId ? 'You: ' : ''}${base}`
+}
+
+function imageSrc(message: ChatMessage): string {
+  return `data:${message.imageContentType};base64,${message.imageData}`
+}
+
 function showSocketError(message: string): void {
   socketError.value = message
   if (socketErrorTimer) clearTimeout(socketErrorTimer)
@@ -116,6 +136,7 @@ function markRead(friendId: string): void {
 
   const conversation = conversations.value.find((c) => c.friendId === friendId)
   if (conversation) conversation.unreadCount = 0
+  chat.markRead(friendId)
 
   void apiRequest(`/messages/${friendId}/read`, { method: 'POST' }).catch(() => {})
   socket?.emit('message:read', { senderId: friendId })
@@ -206,6 +227,7 @@ async function loadConversations(): Promise<void> {
 
 async function openConversation(friendId: string): Promise<void> {
   activeFriendId.value = friendId
+  chat.setOpenThread(friendId)
   messages.value = []
   threadError.value = ''
   threadLoading.value = true
@@ -251,10 +273,62 @@ function startConversation(friendId: string): void {
    ========================================================= */
 
 function send(): void {
+  if (!activeFriendId.value || socket?.connected !== true) return
   const body = draft.value.trim()
-  if (!body || !activeFriendId.value || socket?.connected !== true) return
+  const image = imagePending.value
+  if (!body && !image) return
+
+  const payload: Record<string, string> = { recipientId: activeFriendId.value }
+  if (body) payload.body = body
+  if (image) {
+    payload.imageContentType = image.contentType
+    payload.imageData = dataUrlImageData(image.dataUrl)
+  }
+
   draft.value = ''
-  socket.emit('message:send', { recipientId: activeFriendId.value, body })
+  imagePending.value = null
+  socket.emit('message:send', payload)
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(new Error('Could not read the image'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onImagePicked(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  if (!(CHAT_IMAGE_TYPES as readonly string[]).includes(file.type)) {
+    showSocketError('Only PNG, JPEG, GIF, and WebP images are supported')
+    return
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    showSocketError('Images must be 3 MB or smaller')
+    return
+  }
+
+  try {
+    imagePending.value = {
+      contentType: file.type,
+      dataUrl: await readFileAsDataUrl(file),
+      name: file.name,
+    }
+  } catch (err) {
+    showSocketError(
+      err instanceof Error ? err.message : 'Could not read the image',
+    )
+  }
+}
+
+function removeImage(): void {
+  imagePending.value = null
 }
 
 
@@ -325,6 +399,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (socketErrorTimer) clearTimeout(socketErrorTimer)
+  chat.setOpenThread(null)
   socket?.disconnect()
   socket = undefined
 })
@@ -390,11 +465,7 @@ onBeforeUnmount(() => {
           <div class="conversation-info">
             <span class="conversation-name">{{ conversation.friendUsername }}</span>
             <span class="conversation-preview">
-              {{
-                conversation.lastMessage
-                  ? `${conversation.lastMessage.senderId === auth.userId ? 'You: ' : ''}${conversation.lastMessage.body}`
-                  : 'No messages yet'
-              }}
+              {{ conversationPreview(conversation.lastMessage) }}
             </span>
           </div>
 
@@ -444,7 +515,13 @@ onBeforeUnmount(() => {
               :class="{ own: message.senderId === auth.userId }"
             >
               <div class="message-bubble">
-                <span>{{ message.body }}</span>
+                <img
+                  v-if="message.imageContentType && message.imageData"
+                  :src="imageSrc(message)"
+                  class="message-image"
+                  :alt="message.body ?? ''"
+                />
+                <span v-if="message.body">{{ message.body }}</span>
                 <span class="message-meta">
                   {{ formatChatTime(message.createdAt) }}
                   <span v-if="message.senderId === auth.userId">
@@ -461,6 +538,18 @@ onBeforeUnmount(() => {
           </div>
 
           <form class="message-composer" @submit.prevent="send">
+            <div v-if="imagePending" class="image-chip">
+              <img :src="imagePending.dataUrl" alt="" class="image-chip-thumb" />
+              <span class="image-chip-name">{{ imagePending.name }}</span>
+              <button
+                class="friend-card-close"
+                type="button"
+                aria-label="Remove image"
+                @click="removeImage"
+              >
+                ×
+              </button>
+            </div>
             <input
               v-model="draft"
               maxlength="2000"
@@ -468,9 +557,40 @@ onBeforeUnmount(() => {
               autocomplete="off"
             />
             <button
+              class="button subtle attach-button"
+              type="button"
+              aria-label="Attach an image"
+              title="Attach an image (PNG, JPEG, GIF, WebP, up to 3 MB)"
+              :disabled="connection !== 'live'"
+              @click="fileInput?.click()"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                  d="M4 6h16v12H4z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                />
+                <circle cx="9" cy="10" r="1.5" fill="currentColor" />
+                <path
+                  d="M4 16l4-4 3 3 3-4 6 6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                />
+              </svg>
+            </button>
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              class="hidden-input"
+              @change="onImagePicked"
+            />
+            <button
               class="button primary"
               type="submit"
-              :disabled="!draft.trim() || connection !== 'live'"
+              :disabled="(!draft.trim() && !imagePending) || connection !== 'live'"
             >
               Send
             </button>

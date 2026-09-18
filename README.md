@@ -11,7 +11,7 @@ Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO
 - **Privacy Controls**: Four sharing modes (Ghost, Everyone, Selected, Except-selected)
 - **Fast Revocation**: Visibility changes take effect in under 2 seconds
 - **Friendship Management**: Send, accept, reject, and remove friend requests
-- **Direct Messaging**: Real-time chat with friends, including read receipts
+- **Direct Messaging**: Real-time chat with friends, including read receipts and secure image attachments
 - **Online Presence**: See who's online, updated live via Redis-backed presence
 - **Location History**: View your own 24-hour location history
 - **Location Validation**: Rejects stale, out-of-order, and implausible-speed points
@@ -133,7 +133,7 @@ VITE_API_URL=http://localhost:3000
 - **Friendships**: Friend request management, status tracking
 - **Sharing**: Privacy settings, visibility logic (enforced on HTTP, WebSocket, and history reads)
 - **Location**: Real-time location updates, WebSocket gateway, history, validation
-- **Messages**: Direct messaging with read receipts, plus Redis-backed online presence
+- **Messages**: Real-time messaging with read receipts, image attachments, global unread badges + toasts, plus Redis-backed online presence
 - **Health**: Service health checks, monitoring endpoints
 - **Throttling**: Distributed rate limiting via Redis (HTTP routes and socket events)
 
@@ -144,7 +144,7 @@ VITE_API_URL=http://localhost:3000
 - **SharingListEntry**: owner/friend/listType (SELECTED or EXCEPT)
 - **RefreshToken**: JWT refresh tokens with expiration
 - **LocationHistoryPoint**: Sampled location history with 24-hour retention
-- **Message**: sender/recipient/body/readAt, indexed for conversation queries
+- **Message**: sender/recipient/body (optional)/readAt + validated image payload (content type + bytes), indexed for conversation queries
 
 ## Real-time Design
 
@@ -175,6 +175,7 @@ The architecture is designed to scale horizontally rather than optimized against
 - **Environment Validation**: Required secrets are validated at boot; insecure defaults rejected
 - **Non-root Containers**: All containers run as non-root users
 - **Authorization Enforcement**: Friendship-checked on every HTTP, WebSocket, and history read
+- **Image Attachment Validation**: Images are sniffed by magic bytes against an allowlist (PNG/JPEG/GIF/WebP, max 3 MB), so HTML or scripts can't be disguised as attachments
 
 ## Testing
 
@@ -199,7 +200,7 @@ npm run build
 - Full auth flow: register → login → refresh-token rotation → logout revocation
 - Friendship access control (authenticated lists, empty pending inbox)
 - Socket.IO: rejected connections, location broadcast between friends, stop/resume viewing
-- Chat + presence: message delivery between friends with persistence, messaging non-friends rejected, online/offline broadcast
+- Chat + presence: message delivery between friends with persistence, image-attachment delivery, messaging non-friends rejected, online/offline broadcast
 
 **Unit coverage**
 - Auth service, refresh-token rotation
@@ -208,7 +209,7 @@ npm run build
 - Location validation (stale/future/out-of-order/implausible speed)
 - Location + messages gateways (connection, rate limiting, privacy, read receipts)
 - Presence service (online/offline state, snapshots)
-- Web: API client token handling, Pinia auth store, presence store
+- Web: API client token handling, Pinia auth/presence/chat stores
 
 ## Trade-offs
 

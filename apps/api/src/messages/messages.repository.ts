@@ -53,10 +53,18 @@ export class MessagesRepository {
   async save(
     senderId: string,
     recipientId: string,
-    body: string,
+    body: string | null,
+    image?: { imageContentType: string; imageData: string } | undefined,
   ): Promise<Message> {
     return this.prisma.message.create({
-      data: { senderId, recipientId, body },
+      data: {
+        senderId,
+        recipientId,
+        body,
+        ...(image
+          ? { imageContentType: image.imageContentType, imageData: image.imageData }
+          : {}),
+      },
     });
   }
 

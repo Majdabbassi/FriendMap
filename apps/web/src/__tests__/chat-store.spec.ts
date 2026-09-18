@@ -1,0 +1,175 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useChatStore } from '../stores/chat'
+import type { ChatMessage } from '../api'
+
+function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: 'm1',
+    senderId: 'bob',
+    recipientId: 'me',
+    body: 'hello',
+    imageContentType: null,
+    imageData: null,
+    readAt: null,
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  }
+}
+
+describe('chat store', () => {
+  let originalVisibility: string
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    originalVisibility = document.visibilityState
+  })
+
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: originalVisibility,
+    })
+    vi.restoreAllMocks()
+  })
+
+  function setVisibility(state: string): void {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: state,
+    })
+  }
+
+  it('counts distinct conversations with unread messages', () => {
+    const store = useChatStore()
+    setVisibility('hidden')
+
+    store.handleIncoming(message({ senderId: 'bob' }))
+    store.handleIncoming(message({ senderId: 'bob', id: 'm2' }))
+    store.handleIncoming(message({ senderId: 'carol', id: 'm3' }))
+
+    expect(store.unreadCount()).toBe(2)
+  })
+
+  it('shows a toast naming the sender and latest contents', () => {
+    const store = useChatStore()
+    setVisibility('hidden')
+
+    store.handleIncoming(message({ senderId: 'bob', body: 'check this' }))
+
+    expect(store.lastMessage).toEqual({
+      friendId: 'bob',
+      friendUsername: 'a friend',
+      body: 'check this',
+    })
+  })
+
+  it('falls back to a Photo label for image-only messages', () => {
+    const store = useChatStore()
+    setVisibility('hidden')
+
+    store.handleIncoming(
+      message({
+        senderId: 'bob',
+        body: null,
+        imageContentType: 'image/png',
+        imageData: 'aGVsbG8=',
+      }),
+    )
+
+    expect(store.lastMessage?.body).toBe('📷 Photo')
+  })
+
+  it('does not count or toast messages for the actively viewed thread', () => {
+    const store = useChatStore()
+    setVisibility('visible')
+    store.setOpenThread('bob')
+
+    store.handleIncoming(message({ senderId: 'bob' }))
+
+    expect(store.unreadCount()).toBe(0)
+    expect(store.lastMessage).toBeNull()
+  })
+
+  it('counts new messages for other friends while a thread is open', () => {
+    const store = useChatStore()
+    setVisibility('visible')
+    store.setOpenThread('bob')
+
+    store.handleIncoming(message({ senderId: 'carol', id: 'm2' }))
+
+    expect(store.unreadCount()).toBe(1)
+  })
+
+  it('markRead clears only that friend from the unread count', () => {
+    const store = useChatStore()
+    setVisibility('hidden')
+    store.handleIncoming(message({ senderId: 'bob' }))
+    store.handleIncoming(message({ senderId: 'carol', id: 'm2' }))
+
+    store.markRead('bob')
+
+    expect(store.unreadCount()).toBe(1)
+    expect(store.unreadFriendIds).toEqual(['carol'])
+  })
+
+  it('syncs unread state from the persisted conversation list', () => {
+    const store = useChatStore()
+    store.syncFromConversations([
+      {
+        friendId: 'bob',
+        friendUsername: 'bob',
+        friendEmail: 'bob@friendmap.dev',
+        lastMessage: null,
+        unreadCount: 3,
+        friendOnline: true,
+      },
+      {
+        friendId: 'carol',
+        friendUsername: 'carol',
+        friendEmail: 'carol@friendmap.dev',
+        lastMessage: null,
+        unreadCount: 0,
+        friendOnline: false,
+      },
+    ])
+
+    expect(store.unreadCount()).toBe(1)
+    expect(store.unreadFriendIds).toEqual(['bob'])
+  })
+
+  it('uses the friend username from the seeded friendships list', async () => {
+    const store = useChatStore()
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify([
+            { id: 'f1', status: 'ACCEPTED', friend: { id: 'bob', username: 'bob' } },
+          ]),
+          { status: 200 },
+        ),
+      )
+
+    await store.seed()
+    fetchMock.mockClear()
+
+    setVisibility('hidden')
+    store.handleIncoming(message({ senderId: 'bob' }))
+
+    expect(store.lastMessage?.friendUsername).toBe('bob')
+  })
+
+  it('reset clears counts, threads, and toasts', () => {
+    const store = useChatStore()
+    setVisibility('hidden')
+    store.handleIncoming(message({ senderId: 'bob' }))
+    store.setOpenThread('bob')
+
+    store.reset()
+
+    expect(store.unreadCount()).toBe(0)
+    expect(store.openThreadFriendId).toBeNull()
+    expect(store.lastMessage).toBeNull()
+  })
+})

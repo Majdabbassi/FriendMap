@@ -113,6 +113,62 @@ describe('Chat + presence (e2e)', () => {
     }
   });
 
+  it('delivers an image message and persists it', async () => {
+    const alice = await connectAs(aliceToken);
+    const bob = await connectAs(bobToken);
+
+    try {
+      const bobFriendId = await friendId(aliceToken, 'bob');
+      const pngMagic = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      ]).toString('base64');
+
+      const received = await new Promise<{
+        id: string;
+        body: string | null;
+        imageContentType: string | null;
+        imageData: string | null;
+      }>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('no image message:new received')),
+          3000,
+        );
+        bob.once('message:new', (data) => {
+          clearTimeout(timer);
+          resolve(data as {
+            id: string;
+            body: string | null;
+            imageContentType: string | null;
+            imageData: string | null;
+          });
+        });
+        alice.emit('message:send', {
+          recipientId: bobFriendId,
+          body: 'a photo',
+          imageContentType: 'image/png',
+          imageData: pngMagic,
+        });
+      });
+
+      expect(received.body).toBe('a photo');
+      expect(received.imageContentType).toBe('image/png');
+      expect(received.imageData).toBe(pngMagic);
+
+      const history = await request(app.getHttpServer())
+        .get(`/messages/${received.senderId}`)
+        .set('Authorization', `Bearer ${bobToken}`)
+        .expect(200);
+      expect(history.body as { imageContentType: string }[]).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ imageContentType: 'image/png' }),
+        ]),
+      );
+    } finally {
+      alice.disconnect();
+      bob.disconnect();
+    }
+  });
+
   it('forbids messaging non-friends', async () => {
     const alice = await connectAs(aliceToken);
 

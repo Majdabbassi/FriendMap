@@ -122,7 +122,9 @@ export type ChatMessage = {
   id: string
   senderId: string
   recipientId: string
-  body: string
+  body: string | null
+  imageContentType: string | null
+  imageData: string | null
   readAt: string | null
   createdAt: string
 }
