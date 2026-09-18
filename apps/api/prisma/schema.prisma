@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+}
+
+enum SharingMode {
+  GHOST
+  EVERYONE
+  SELECTED
+  EXCEPT_SELECTED
+}
+
+enum SharingListType {
+  SELECTED
+  EXCEPT
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  sharingSettings SharingSettings?
+  refreshTokens  RefreshToken[]
+
+  sentRequests     Friendship[] @relation("Requester")
+  receivedRequests Friendship[] @relation("Addressee")
+
+  listEntriesOwned  SharingListEntry[] @relation("Owner")
+  listEntriesAsFriend SharingListEntry[] @relation("FriendRef")
+
+  locationHistory LocationHistoryPoint[]
+
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+
+  @@index([email])
+  @@index([username])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+}
+
+model Friendship {
+  id           String            @id @default(uuid())
+  requesterId  String
+  addresseeId  String
+  status       FriendshipStatus  @default(PENDING)
+  createdAt    DateTime          @default(now())
+
+  requester User @relation("Requester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("Addressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@index([requesterId, status])
+  @@index([addresseeId, status])
+  @@index([status])
+}
+
+model SharingSettings {
+  id        String      @id @default(uuid())
+  userId    String      @unique
+  mode      SharingMode @default(GHOST)
+  updatedAt DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([mode])
+}
+
+model SharingListEntry {
+  id        String          @id @default(uuid())
+  ownerId   String
+  friendId  String
+  listType  SharingListType
+  createdAt DateTime        @default(now())
+
+  owner  User @relation("Owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  friend User @relation("FriendRef", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, friendId, listType])
+  @@index([ownerId, listType])
+  @@index([friendId])
+}
+
+model LocationHistoryPoint {
+  id         String   @id @default(uuid())
+  userId     String
+  lat        Float
+  lng        Float
+  accuracy   Float?
+  recordedAt DateTime
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recordedAt])
+  @@index([expiresAt])
+  @@index([userId, expiresAt])
+}
+
+model Message {
+  id          String    @id @default(uuid())
+  senderId    String
+  recipientId String
+  body        String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  sender    User @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, readAt])
+}
