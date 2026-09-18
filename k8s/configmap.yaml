@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: friendmap-config
+  namespace: default
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  REDIS_PORT: "6379"
+  CORS_ORIGINS: "http://friendmap.local"
