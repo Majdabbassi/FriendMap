@@ -1,28 +1,30 @@
 # FriendMap
 
-Real-time location sharing between friends, with privacy controls (Ghost / Everyone / Selected / Except-selected) and fast revocation when a user changes who can see them.
+Real-time location sharing between friends, with privacy controls (Ghost / Everyone / Selected / Except-selected), fast revocation when a user changes who can see them — plus direct messaging and online presence between friends.
 
-Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO · Vue 3 · Docker Compose · Kubernetes.
+Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO · Vue 3 · Pinia · Leaflet · Docker Compose · Kubernetes.
 
-## 🎯 Features
+## Features
 
 ### Core Functionality
 - **Real-time Location Sharing**: Share your live location with friends via WebSocket
 - **Privacy Controls**: Four sharing modes (Ghost, Everyone, Selected, Except-selected)
 - **Fast Revocation**: Visibility changes take effect in under 2 seconds
 - **Friendship Management**: Send, accept, reject, and remove friend requests
+- **Direct Messaging**: Real-time chat with friends, including read receipts
+- **Online Presence**: See who's online, updated live via Redis-backed presence
 - **Location History**: View your own 24-hour location history
 - **Location Validation**: Rejects stale, out-of-order, and implausible-speed points
 
 ### Production-Ready Features
 - **Horizontal Scaling**: Kubernetes deployment with Socket.IO Redis adapter
 - **Refresh Token Flow**: Secure JWT authentication with token rotation
-- **Enhanced Security**: Helmet headers, rate limiting, non-root containers
-- **Repository Pattern**: Clean data access layer with optimized queries
+- **Enhanced Security**: Helmet headers, HTTP + socket rate limiting, non-root containers, environment validation at boot
+- **Repository Pattern**: Clean data access layer with optimized batch queries (no N+1)
 - **Health Monitoring**: Comprehensive health checks for all services
-- **Batch Operations**: Eliminated N+1 queries for better performance
+- **API Documentation**: Swagger/OpenAPI at `/docs`, generated from DTOs
 
-## 📸 Screenshots
+## Screenshots
 
 | Description | Screenshot |
 |---|---|
@@ -30,9 +32,10 @@ Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO
 | Sharing controls | ![Sharing controls](docs/screenshots/sharing.png) |
 | Friends list | ![Friends list](docs/screenshots/friends.png) |
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Docker Compose (Development)
+
 ```bash
 git clone https://github.com/Majdabbassi/FriendMap.git
 cd FriendMap
@@ -46,19 +49,27 @@ docker compose up --build
 - API docs (Swagger): <http://localhost:3000/docs>
 - Health check: <http://localhost:3000/health>
 
+> Containers run as non-root users. Seeded demo users (below) are created automatically on API startup in non-production environments.
+
 ### Kubernetes (Production)
+
 ```bash
 cd k8s
-cp secrets.yaml.template secrets.yaml
-# Edit secrets.yaml with your actual values
-kubectl apply -f .
+cp secrets.yaml.template secrets.yaml   # then fill in real secrets
+# Update image references in api-deployment.yaml / web-deployment.yaml
+kubectl apply -f configmap.yaml -f secrets.yaml
+kubectl apply -f postgres-pvc.yaml -f redis-pvc.yaml
+kubectl apply -f postgres-deployment.yaml -f postgres-service.yaml
+kubectl apply -f redis-deployment.yaml -f redis-service.yaml
+kubectl apply -f api-deployment.yaml -f api-service.yaml
+kubectl apply -f web-deployment.yaml -f web-service.yaml
+kubectl apply -f ingress.yaml
 ```
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
+Service layout: API (3 replicas), Web (2 replicas), PostgreSQL (1), Redis (1). Roll back with `kubectl rollout undo deployment/<name>`. Find issues via `kubectl get pods` and `kubectl logs -f deployment/api`.
 
-## 🔧 Setup & Configuration
+## Environment Variables
 
-### Environment Variables
 ```bash
 # Database
 POSTGRES_USER=friendmap
@@ -79,12 +90,17 @@ NODE_ENV=development
 VITE_API_URL=http://localhost:3000
 ```
 
-### Demo Users
-5 demo users are seeded automatically on startup:
+`JWT_SECRET`, `DATABASE_URL`, `REDIS_PASSWORD`, and `NODE_ENV` are validated at boot — insecure defaults are rejected.
+
+## Demo Users
+
+5 demo users are seeded automatically on startup (non-production):
+
 - Accounts: `alice`, `bob`, `carol`, `dave`, `erin` @ `friendmap.dev`
 - Password: `password123`
+- Friendships: alice↔bob, alice↔carol, bob↔carol, bob↔dave, carol↔erin
 
-## 🏗️ Architecture
+## Architecture
 
 ```
             ┌──────────────┐
@@ -101,7 +117,7 @@ VITE_API_URL=http://localhost:3000
             │ Friendships   │
             │ Sharing       │
             │ Location      │
-            │  Gateway      │
+            │ Messages      │
             │ Health        │
             └───┬───────┬───┘
                 │       │
@@ -113,12 +129,13 @@ VITE_API_URL=http://localhost:3000
 ```
 
 ### Module Structure
-- **Auth**: JWT authentication, refresh tokens, user registration
+- **Auth**: JWT authentication, refresh-token rotation, user registration
 - **Friendships**: Friend request management, status tracking
-- **Sharing**: Privacy settings, visibility logic, list management
-- **Location**: Real-time location updates, WebSocket gateway, history
+- **Sharing**: Privacy settings, visibility logic (enforced on HTTP, WebSocket, and history reads)
+- **Location**: Real-time location updates, WebSocket gateway, history, validation
+- **Messages**: Direct messaging with read receipts, plus Redis-backed online presence
 - **Health**: Service health checks, monitoring endpoints
-- **Throttling**: Distributed rate limiting via Redis
+- **Throttling**: Distributed rate limiting via Redis (HTTP routes and socket events)
 
 ### Data Model
 - **User**: email, username, password hash, refresh tokens
@@ -127,44 +144,41 @@ VITE_API_URL=http://localhost:3000
 - **SharingListEntry**: owner/friend/listType (SELECTED or EXCEPT)
 - **RefreshToken**: JWT refresh tokens with expiration
 - **LocationHistoryPoint**: Sampled location history with 24-hour retention
+- **Message**: sender/recipient/body/readAt, indexed for conversation queries
 
-## 📡 Real-time Design
+## Real-time Design
 
 - **Socket.IO Redis Adapter**: Enables horizontal scaling across multiple pods
-- **Room-based Broadcasting**: Each user has personal rooms for targeted updates
+- **Room-based Broadcasting**: Each user has personal rooms for targeted updates (`user:{id}` for chat/presence, `location:{id}` for map viewers)
 - **Visibility Enforcement**: Checked on connect, mode change, list change, and unfriend
-- **Rate Limiting**: Redis-based distributed rate limiting for location updates
+- **WebSocket Events**: `message:send` / `message:new` / `message:read`, plus `presence:update` / `presence:snapshot`
+- **Presence via Redis**: Online state stored with a 90-second TTL, surfaced as snapshots to friends
+- **Rate Limiting**: Redis-based distributed limits for location updates, messaging, and message reads
 - **Location Validation**: Rejects future (>30s), stale (>5min), out-of-order, and implausible-speed (>500km/h) points
 - **History Sampling**: Stores points ≥30s or ≥25m apart, purged after 24 hours
 
-## 🚀 Scaling to 100k Users
+## Scaling
 
-### Current Architecture Capacity
-- **API Pods**: 3 replicas handling ~33k concurrent connections each
-- **Redis**: Pub/sub for WebSocket communication, rate limiting
-- **PostgreSQL**: Optimized with composite indexes for high throughput
-- **Network**: ~12MB/second bandwidth requirement
+The architecture is designed to scale horizontally rather than optimized against a single load target:
 
-### Bottlenecks & Mitigations
-1. **Redis Single Point**: Implement Redis Cluster for >150k users
-2. **Database Connections**: Add PgBouncer for connection pooling
-3. **WebSocket Memory**: Scale pods or increase memory allocation
-4. **History Writes**: Implement time-series partitioning for >200k users
+- **Stateless API pods**: All live state (current positions, presence) lives in Redis, so any pod can serve any connection
+- **Redis pub/sub**: Socket.IO fan-out + distributed rate limiting shared across pods
+- **Connection scaling**: Add API replicas as connection counts grow; scale Redis (e.g. cluster mode) when pub/sub volume demands
+- **Database**: Composite indexes on hot query patterns; batch visibility queries keep reads flat as friend lists grow; add PgBouncer or read replicas when contention rises
+- **History growth**: Partition or move sampled history to a time-series store at very large write volumes
 
-See [SCALING_ANALYSIS.md](SCALING_ANALYSIS.md) for detailed capacity planning.
+## Security Features
 
-## 🔒 Security Features
-
-- **Refresh Token Flow**: Short-lived access tokens (15min) + long-lived refresh tokens (7 days)
+- **Refresh Token Flow**: Short-lived access tokens (15min) + long-lived refresh tokens (7 days), rotated and revoked on logout
 - **Helmet Integration**: Security headers for all HTTP responses
-- **Enhanced Rate Limiting**: 3 requests/minute for auth endpoints
+- **Rate Limiting**: Auth endpoints limited to 3 requests/minute; socket events rate-limited via Redis
+- **Environment Validation**: Required secrets are validated at boot; insecure defaults rejected
 - **Non-root Containers**: All containers run as non-root users
-- **Required Secrets**: No insecure defaults, all credentials externalized
-- **Authorization Enforcement**: Checked on HTTP, WebSocket, and history reads
+- **Authorization Enforcement**: Friendship-checked on every HTTP, WebSocket, and history read
 
-## 🧪 Testing
+## Testing
 
-Both workspaces ship with Vitest (web) and Jest (API) unit tests, plus a real end-to-end suite.
+Both workspaces ship with unit tests (Jest for API, Vitest for web) plus a real end-to-end suite against Postgres + Redis.
 
 ```bash
 # API unit tests + lint
@@ -175,64 +189,50 @@ npm run lint
 # API end-to-end tests (requires Postgres + Redis, see docker-compose.yml)
 npm run test:e2e
 
-# Web unit tests
+# Web unit tests + build
 cd ../web
 npm run test:unit
+npm run build
 ```
 
-E2E coverage (runs against the seeded demo users):
+**E2E coverage**
 - Full auth flow: register → login → refresh-token rotation → logout revocation
 - Friendship access control (authenticated lists, empty pending inbox)
 - Socket.IO: rejected connections, location broadcast between friends, stop/resume viewing
+- Chat + presence: message delivery between friends with persistence, messaging non-friends rejected, online/offline broadcast
 
-Unit coverage:
-- Auth service, refresh token rotation
+**Unit coverage**
+- Auth service, refresh-token rotation
 - Visibility/authorization logic (all 4 sharing modes)
 - Friendship request handling (duplicates, status transitions)
 - Location validation (stale/future/out-of-order/implausible speed)
-- WebSocket gateway (connection, rate limiting, privacy events)
-- Web: API client token handling + Pinia auth store
-- API docs at <http://localhost:3000/docs> (Swagger UI)
+- Location + messages gateways (connection, rate limiting, privacy, read receipts)
+- Presence service (online/offline state, snapshots)
+- Web: API client token handling, Pinia auth store, presence store
 
-## 📚 Documentation
-
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) - Comprehensive implementation details
-- [SCALING_ANALYSIS.md](SCALING_ANALYSIS.md) - Capacity planning and bottlenecks
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Complete deployment guide
-- [k8s/README.md](k8s/README.md) - Kubernetes deployment instructions
-
-## 🔄 Trade-offs
+## Trade-offs
 
 ### Implemented Solutions
-- ✅ Socket.IO Redis adapter for horizontal scaling
-- ✅ Redis-based distributed rate limiting
-- ✅ Complete refresh token flow
-- ✅ Repository pattern for clean data access
-- ✅ Kubernetes manifests for production deployment
-- ✅ Enhanced security (Helmet, rate limiting, non-root containers)
-- ✅ Batch operations to eliminate N+1 queries
-- ✅ Health monitoring and observability
+- Socket.IO Redis adapter for horizontal scaling
+- Redis-based distributed rate limiting
+- Complete refresh-token flow
+- Repository pattern for clean data access
+- Kubernetes manifests for production deployment
+- Security hardening (Helmet, rate limiting, env validation, non-root containers)
+- Batch operations to eliminate N+1 queries
+- Health monitoring and observability
 
 ### Remaining Enhancements
 - Metrics collection (Prometheus integration planned)
-- Distributed tracing (Jaeger integration planned)
-- Redis clustering (for >150k users)
+- Distributed tracing (planned)
+- Redis cluster mode (needed at very high concurrency)
 
-## 🎓 Implementation Approach
-
-Built from the ground up around privacy-first real-time sharing: the API enforces visibility at every boundary (HTTP, WebSocket, and history reads), Redis powers horizontally-scalable socket broadcast and distributed rate limiting, and the Vue client keeps a 2-second revocation target for sharing-mode changes. The repo is organized around clear module boundaries (auth, friendships, sharing, location, health) with thin controllers, strict TypeScript, and tests at every layer.
-
-- Strict TypeScript throughout, thin controllers, repository pattern for data access
-- Kubernetes-ready: Socket.IO Redis adapter, health checks, non-root containers
-- Distributed rate limiting via Redis, batch queries to eliminate N+1
-
-## 📞 Support
+## Support
 
 For issues or questions:
-- Check the [troubleshooting section](DEPLOYMENT.md#troubleshooting)
-- Review the [scaling analysis](SCALING_ANALYSIS.md) for performance issues
+- Check the logs (`docker compose logs -f api`, `kubectl logs -f deployment/api`)
 - Open an issue on GitHub for bugs
 
-## 🎥 Walkthrough
+## Walkthrough
 
 Watch the [Loom walkthrough](https://www.loom.com/share/9f81f4a086174129a44bb644c7677327) to see the app in action.
