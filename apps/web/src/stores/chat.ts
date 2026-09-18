@@ -26,6 +26,7 @@ export const useChatStore = defineStore('chat', () => {
     body: string
   } | null>(null)
   const openThreadFriendId = ref<string | null>(null)
+  const typingFriendIds = ref(new Set<string>())
 
   const friendUsernames: Record<string, string> = {}
   let socket: Socket | undefined
@@ -38,6 +39,18 @@ export const useChatStore = defineStore('chat', () => {
 
   function setOpenThread(friendId: string | null): void {
     openThreadFriendId.value = friendId
+  }
+
+  function isTyping(friendId: string): boolean {
+    return typingFriendIds.value.has(friendId)
+  }
+
+  function setTyping(friendId: string, typing: boolean): void {
+    if (typing === typingFriendIds.value.has(friendId)) return
+    const next = new Set(typingFriendIds.value)
+    if (typing) next.add(friendId)
+    else next.delete(friendId)
+    typingFriendIds.value = next
   }
 
   function markRead(friendId: string): void {
@@ -122,15 +135,19 @@ export const useChatStore = defineStore('chat', () => {
     unreadFriendIds.value = []
     openThreadFriendId.value = null
     lastMessage.value = null
+    typingFriendIds.value = new Set()
   }
 
   return {
     unreadFriendIds,
     lastMessage,
     openThreadFriendId,
+    typingFriendIds,
     unreadCount,
     setOpenThread,
     markRead,
+    isTyping,
+    setTyping,
     syncFromConversations,
     showToast,
     dismissToast,

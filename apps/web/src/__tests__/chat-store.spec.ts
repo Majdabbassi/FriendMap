@@ -12,6 +12,7 @@ function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
     imageUrl: null,
     readAt: null,
     createdAt: new Date().toISOString(),
+    deletedAt: null,
     ...overrides,
   }
 }
@@ -121,6 +122,7 @@ describe('chat store', () => {
         lastMessage: null,
         unreadCount: 3,
         friendOnline: true,
+        friendLastSeen: null,
       },
       {
         friendId: 'carol',
@@ -129,6 +131,7 @@ describe('chat store', () => {
         lastMessage: null,
         unreadCount: 0,
         friendOnline: false,
+        friendLastSeen: null,
       },
     ])
 
@@ -169,5 +172,31 @@ describe('chat store', () => {
     expect(store.unreadCount()).toBe(0)
     expect(store.openThreadFriendId).toBeNull()
     expect(store.lastMessage).toBeNull()
+  })
+
+  it('tracks which friends are currently typing', () => {
+    const store = useChatStore()
+    expect(store.isTyping('bob')).toBe(false)
+
+    store.setTyping('bob', true)
+    store.setTyping('carol', true)
+    expect(store.isTyping('bob')).toBe(true)
+    expect(store.isTyping('carol')).toBe(true)
+    expect(store.typingFriendIds).toEqual(new Set(['bob', 'carol']))
+
+    store.setTyping('bob', false)
+    expect(store.isTyping('bob')).toBe(false)
+    expect(store.isTyping('carol')).toBe(true)
+  })
+
+  it('drops typing flags on reset', () => {
+    const store = useChatStore()
+    store.setTyping('bob', true)
+    store.setTyping('carol', true)
+
+    store.reset()
+
+    expect(store.isTyping('bob')).toBe(false)
+    expect(store.isTyping('carol')).toBe(false)
   })
 })

@@ -31,6 +31,8 @@ describe('MessagesGateway', () => {
     setOnline: jest.fn(),
     setOffline: jest.fn(),
     listOnlineUserIds: jest.fn(),
+    getManySnapshots: jest.fn(),
+    touchOnline: jest.fn(),
   };
   const redisThrottler = { isRateLimited: jest.fn().mockResolvedValue(false) };
 
@@ -199,9 +201,14 @@ describe('MessagesGateway', () => {
   });
 
   describe('presenceSnapshot', () => {
-    it('returns the online friend ids', async () => {
+    it('returns the online friend ids and last-seen timestamps', async () => {
       friendshipsRepository.findAcceptedFriendIds.mockResolvedValue([bob, carol]);
-      presenceService.listOnlineUserIds.mockResolvedValue([bob]);
+      presenceService.getManySnapshots.mockResolvedValue(
+        new Map([
+          [bob, { online: true, lastSeen: 111 }],
+          [carol, { online: false, lastSeen: 222 }],
+        ]),
+      );
       const socket = createSocket();
       socket.data.userId = alice;
 
@@ -209,6 +216,7 @@ describe('MessagesGateway', () => {
 
       expect(socket.emit).toHaveBeenCalledWith('presence:snapshot', {
         onlineUserIds: [bob],
+        lastSeenByUserId: { [bob]: 111, [carol]: 222 },
       });
     });
   });

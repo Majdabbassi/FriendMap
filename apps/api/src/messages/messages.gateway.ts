@@ -13,6 +13,7 @@ import { FriendshipsRepository } from '../friendships/friendships.repository';
 import { RedisThrottlerService } from '../throttling/redis-throttler.service';
 import { MarkMessageReadDto } from './dto/mark-message-read.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { TypingDto } from './dto/typing.dto';
 import { MessagesService } from './messages.service';
 import { PresenceService } from './presence.service';
 
@@ -53,6 +54,14 @@ export class MessagesGateway {
       (socket.data as { userId?: string }).userId = payload.sub;
       await socket.join(`user:${payload.sub}`);
       await this.presenceService.setOnline(payload.sub);
+
+      const heartbeat = setInterval(() => {
+        void this.presenceService.touchOnline(payload.sub);
+      }, 45_000);
+      heartbeat.unref?.();
+      (socket.data as { userId?: string; heartbeat?: ReturnType<typeof setInterval> }).heartbeat =
+        heartbeat;
+
       await this.broadcastPresence(payload.sub, true);
     } catch {
       socket.disconnect(true);
@@ -64,6 +73,9 @@ export class MessagesGateway {
     if (!userId) return;
 
     try {
+      const heartbeat = (socket.data as { heartbeat?: ReturnType<typeof setInterval> }).heartbeat;
+      if (heartbeat) clearInterval(heartbeat);
+
       const remaining = await this.server.in(`user:${userId}`).fetchSockets();
       if (remaining.length > 0) return;
       await this.presenceService.setOffline(userId);
@@ -129,8 +141,59 @@ export class MessagesGateway {
     if (!userId) return;
 
     const friendIds = await this.friendshipsRepository.findAcceptedFriendIds(userId);
-    const onlineUserIds = await this.presenceService.listOnlineUserIds(friendIds);
-    (socket as any).emit('presence:snapshot', { onlineUserIds });
+    const snapshots = await this.presenceService.getManySnapshots(friendIds);
+    const lastSeenByUserId: Record<string, number> = {};
+    const onlineUserIds: string[] = [];
+    for (const friendId of friendIds) {
+      const snapshot = snapshots.get(friendId);
+      if (!snapshot) continue;
+      if (snapshot.online) onlineUserIds.push(friendId);
+      lastSeenByUserId[friendId] = snapshot.lastSeen;
+    }
+    (socket as any).emit('presence:snapshot', { onlineUserIds, lastSeenByUserId });
+  }
+
+  @SubscribeMessage('typing:update')
+  @UsePipes(new ValidationPipe())
+  async typingUpdate(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() payload: TypingDto,
+  ) {
+    const userId = (socket.data as { userId?: string }).userId;
+    if (!userId) return;
+
+    const key = `rate-limit:typing:${userId}`;
+    if (await this.redisThrottler.isRateLimited(key, 30, 60)) return;
+
+    if (payload.friendId === userId) return;
+
+    const areFriends = await this.friendshipsRepository
+      .findBetweenUsers(userId, payload.friendId)
+      .then((rows) =>
+        rows.some((row) => row.status === 'ACCEPTED'),
+      );
+    if (!areFriends) return;
+
+    this.server.to(`user:${payload.friendId}`).emit('typing:update', {
+      friendId: userId,
+      typing: payload.typing,
+    });
+  }
+
+  emitMessageDeleted(message: { id: string; senderId: string; recipientId: string; deletedAt: Date | null }) {
+    this.server.to(`user:${message.senderId}`).emit('message:deleted', {
+      id: message.id,
+      deletedAt: message.deletedAt,
+    });
+    this.server.to(`user:${message.recipientId}`).emit('message:deleted', {
+      id: message.id,
+      deletedAt: message.deletedAt,
+    });
+  }
+
+  emitConversationCleared(friendId: string, userId: string) {
+    this.server.to(`user:${userId}`).emit('conversation:cleared', { friendId });
+    this.server.to(`user:${friendId}`).emit('conversation:cleared', { friendId: userId });
   }
 
   private async broadcastPresence(userId: string, online: boolean) {

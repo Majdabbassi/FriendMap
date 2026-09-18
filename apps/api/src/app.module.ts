@@ -12,6 +12,7 @@ import { UsersModule } from './users/users.module';
 import { SharingModule } from './sharing/sharing.module';
 import { LocationModule } from './location/location.module';
 import { MessagesModule } from './messages/messages.module';
+import { TripsModule } from './trips/trips.module';
 import { SeedModule } from './seed/seed.module';
 import { ThrottlingModule } from './throttling/throttling.module';
 import { HealthModule } from './health/health.module';
@@ -33,6 +34,7 @@ import { HealthModule } from './health/health.module';
     SharingModule,
     LocationModule,
     MessagesModule,
+    TripsModule,
     SeedModule,
   ],
   controllers: [AppController],

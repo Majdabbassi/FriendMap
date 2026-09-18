@@ -57,6 +57,7 @@ onBeforeUnmount(() => {
           <span v-if="chat.unreadCount() > 0" class="nav-badge">{{ chat.unreadCount() }}</span>
         </RouterLink>
         <RouterLink to="/sharing" :class="{ active: route.path === '/sharing' }">Sharing</RouterLink>
+        <RouterLink to="/trips" :class="{ active: route.path.startsWith('/trips') }">Trips</RouterLink>
       </nav>
       <span class="identity">Logged in as: {{ auth.username }}</span>
       <button class="button subtle" @click="logout">Log out</button>

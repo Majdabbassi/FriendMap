@@ -66,6 +66,47 @@ export class MessagesRepository {
     });
   }
 
+  async searchMessages(
+    userId: string,
+    query: string,
+    friendIds: string[],
+    limit = 50,
+  ): Promise<Message[]> {
+    if (friendIds.length === 0) return [];
+    return this.prisma.message.findMany({
+      where: {
+        deletedAt: null,
+        body: { contains: query, mode: 'insensitive' },
+        OR: [
+          { senderId: userId, recipientId: { in: friendIds } },
+          { senderId: { in: friendIds }, recipientId: userId },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  async softDelete(id: string, deletedAt = new Date()): Promise<Message> {
+    return this.prisma.message.update({
+      where: { id },
+      data: { deletedAt },
+    });
+  }
+
+  async softDeleteConversation(userAId: string, userBId: string): Promise<number> {
+    const result = await this.prisma.message.updateMany({
+      where: {
+        OR: [
+          { senderId: userAId, recipientId: userBId },
+          { senderId: userBId, recipientId: userAId },
+        ],
+      },
+      data: { deletedAt: new Date() },
+    });
+    return result.count;
+  }
+
   async markAllRead(fromUserId: string, toUserId: string): Promise<number> {
     const result = await this.prisma.message.updateMany({
       where: {
@@ -81,6 +122,7 @@ export class MessagesRepository {
   async listConversations(userId: string): Promise<Conversation[]> {
     const raw = await this.prisma.message.findMany({
       where: {
+        deletedAt: null,
         OR: [{ senderId: userId }, { recipientId: userId }],
       },
       orderBy: { createdAt: 'desc' },
@@ -101,7 +143,7 @@ export class MessagesRepository {
 
     const unreadRows = await this.prisma.message.groupBy({
       by: ['senderId'],
-      where: { recipientId: userId, readAt: null },
+      where: { recipientId: userId, readAt: null, deletedAt: null },
       _count: { _all: true },
     });
     const unreadBySender = new Map(

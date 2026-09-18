@@ -16,9 +16,13 @@ describe('MessagesService', () => {
     save: jest.fn(),
     markAllRead: jest.fn(),
     listConversations: jest.fn(),
+    searchMessages: jest.fn(),
+    softDelete: jest.fn(),
+    softDeleteConversation: jest.fn(),
   };
   const friendshipsService = { areAcceptedFriends: jest.fn() };
-  const presenceService = { getManyPresence: jest.fn() };
+  const friendshipsRepository = { findAcceptedFriendIds: jest.fn() };
+  const presenceService = { getManySnapshots: jest.fn() };
   let service: MessagesService;
 
   beforeEach(() => {
@@ -26,6 +30,7 @@ describe('MessagesService', () => {
     service = new MessagesService(
       repository as never,
       friendshipsService as never,
+      friendshipsRepository as never,
       presenceService as never,
     );
   });
@@ -203,12 +208,15 @@ describe('MessagesService', () => {
           unreadCount: 0,
         },
       ]);
-      presenceService.getManyPresence.mockResolvedValue(new Map([[bob, true]]));
+      presenceService.getManySnapshots.mockResolvedValue(
+        new Map([[bob, { online: true, lastSeen: 42 }]]),
+      );
 
       const result = await service.conversations(alice);
 
       expect(result[0].friendOnline).toBe(true);
-      expect(presenceService.getManyPresence).toHaveBeenCalledWith([bob]);
+      expect(result[0].friendLastSeen).toBe(42);
+      expect(presenceService.getManySnapshots).toHaveBeenCalledWith([bob]);
     });
   });
 
@@ -229,6 +237,101 @@ describe('MessagesService', () => {
 
       await expect(
         service.markConversationRead(alice, carol),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('searchMessages', () => {
+    it('searches across all accepted-friend conversations', async () => {
+      friendshipsRepository.findAcceptedFriendIds.mockResolvedValue([bob, carol]);
+      repository.searchMessages.mockResolvedValue([]);
+
+      await service.searchMessages(alice, 'hello');
+
+      expect(friendshipsRepository.findAcceptedFriendIds).toHaveBeenCalledWith(
+        alice,
+      );
+      expect(repository.searchMessages).toHaveBeenCalledWith(
+        alice,
+        'hello',
+        [bob, carol],
+      );
+    });
+
+    it('scopes search to a specific friend when allowed', async () => {
+      friendshipsRepository.findAcceptedFriendIds.mockResolvedValue([bob]);
+      repository.searchMessages.mockResolvedValue([]);
+
+      await service.searchMessages(alice, 'hello', bob);
+
+      expect(repository.searchMessages).toHaveBeenCalledWith(alice, 'hello', [bob]);
+    });
+
+    it('rejects searching a non-friend', async () => {
+      friendshipsRepository.findAcceptedFriendIds.mockResolvedValue([bob]);
+
+      await expect(
+        service.searchMessages(alice, 'hello', carol),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('deleteMessage', () => {
+    it('soft-deletes a message the user is part of', async () => {
+      repository.findMessageById.mockResolvedValue({
+        id: 'msg-1',
+        senderId: bob,
+        recipientId: alice,
+        deletedAt: null,
+      });
+      repository.softDelete.mockResolvedValue({ id: 'msg-1', deletedAt: new Date() });
+
+      const result = await service.deleteMessage(alice, 'msg-1');
+
+      expect(repository.softDelete).toHaveBeenCalledWith('msg-1');
+      expect(result.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('returns the message unchanged when already deleted', async () => {
+      const deleted = { id: 'msg-1', senderId: bob, recipientId: alice, deletedAt: new Date() };
+      repository.findMessageById.mockResolvedValue(deleted);
+
+      const result = await service.deleteMessage(alice, 'msg-1');
+
+      expect(repository.softDelete).not.toHaveBeenCalled();
+      expect(result).toBe(deleted);
+    });
+
+    it('forbids deleting a message you are not part of', async () => {
+      repository.findMessageById.mockResolvedValue({
+        id: 'msg-1',
+        senderId: bob,
+        recipientId: carol,
+        deletedAt: null,
+      });
+
+      await expect(service.deleteMessage(alice, 'msg-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+
+  describe('clearConversation', () => {
+    it('soft-deletes the whole thread with a friend', async () => {
+      friendshipsService.areAcceptedFriends.mockResolvedValue(true);
+      repository.softDeleteConversation.mockResolvedValue(5);
+
+      const result = await service.clearConversation(alice, bob);
+
+      expect(repository.softDeleteConversation).toHaveBeenCalledWith(alice, bob);
+      expect(result.deletedCount).toBe(5);
+    });
+
+    it('rejects clearing a conversation with a non-friend', async () => {
+      friendshipsService.areAcceptedFriends.mockResolvedValue(false);
+
+      await expect(
+        service.clearConversation(alice, carol),
       ).rejects.toThrow(ForbiddenException);
     });
   });

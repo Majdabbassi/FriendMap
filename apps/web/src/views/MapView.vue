@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import L from 'leaflet'
 import 'leaflet.markercluster'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import { io, type Socket } from 'socket.io-client'
-import { apiBaseUrl, apiRequest, getAccessToken, type Friendship } from '../api'
+import {
+  apiBaseUrl,
+  apiRequest,
+  createTrip,
+  getAccessToken,
+  type Friendship,
+} from '../api'
 import { usePresenceStore } from '../stores/presence'
+import { formatDistanceKm, haversineKm } from '../utils/distance'
 
 type Point = {
   userId: string
@@ -35,6 +43,7 @@ function clusterGroupInternal(group: L.MarkerClusterGroup): L.MarkerClusterGroup
 
 const mapElement = ref<HTMLElement | null>(null)
 const presence = usePresenceStore()
+const router = useRouter()
 
 const notice = ref('')
 const connection = ref('connecting')
@@ -46,6 +55,18 @@ const historyPointCount = ref(0)
 
 const friends = ref<Friendship[]>([])
 const selectedFriendId = ref<string | null>(null)
+
+const friendSearch = ref('')
+const friendSearchOpen = ref(false)
+const ownPoint = ref<{ lat: number; lng: number } | null>(null)
+const compareOpen = ref(false)
+const compareWithId = ref<string | null>(null)
+const distanceResult = ref<{
+  aName: string
+  bName: string
+  km: number
+} | null>(null)
+const tripCreating = ref(false)
 
 const points = new Map<string, Point>()
 const markers = new Map<string, L.Marker>()
@@ -64,6 +85,7 @@ let noticeTimer: ReturnType<typeof setTimeout> | undefined
 let clock: ReturnType<typeof setInterval> | undefined
 
 let historyLine: L.Polyline | undefined
+let distanceLine: L.Polyline | undefined
 
 
 /* =========================================================
@@ -136,6 +158,135 @@ function formatRelativeTime(timestamp: number): string {
   }
 
   return 'long ago'
+}
+
+
+/* =========================================================
+   FIND A FRIEND
+   ========================================================= */
+
+const findableFriends = computed(() => {
+  const q = friendSearch.value.trim().toLowerCase()
+  if (!q) return friends.value
+  return friends.value.filter(
+    (item) =>
+      item.friend.username.toLowerCase().includes(q) ||
+      item.friend.email.toLowerCase().includes(q),
+  )
+})
+
+function selectSearchResult(friendId: string): void {
+  friendSearch.value = ''
+  friendSearchOpen.value = false
+  selectedFriendId.value = friendId
+
+  const point = points.get(friendId)
+  if (point && map) {
+    map.flyTo([point.lat, point.lng], Math.max(map.getZoom(), 12), {
+      duration: 0.7,
+    })
+  } else {
+    showNotice(`${usernameFor(friendId)} is not sharing their location.`)
+  }
+}
+
+
+/* =========================================================
+   DISTANCE
+   ========================================================= */
+
+function clearMeasure(): void {
+  distanceLine?.remove()
+  distanceLine = undefined
+  compareOpen.value = false
+  compareWithId.value = null
+  distanceResult.value = null
+}
+
+function drawDistanceLine(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): void {
+  if (!map) return
+  distanceLine?.remove()
+  distanceLine = L.polyline(
+    [
+      [a.lat, a.lng],
+      [b.lat, b.lng],
+    ] as [number, number][],
+    {
+      color: '#1b877a',
+      weight: 3,
+      dashArray: '8 8',
+      opacity: 0.9,
+    },
+  ).addTo(map)
+}
+
+function distanceToMe(): void {
+  const friendId = selectedFriendId.value!
+  const peer = points.get(friendId)
+  if (!ownPoint.value || !peer) {
+    showNotice(
+      'Both you and your friend need to be sharing your locations.',
+    )
+    return
+  }
+  const km = haversineKm(
+    ownPoint.value.lat,
+    ownPoint.value.lng,
+    peer.lat,
+    peer.lng,
+  )
+  distanceResult.value = {
+    aName: 'You',
+    bName: usernameFor(friendId),
+    km,
+  }
+  drawDistanceLine(ownPoint.value, peer)
+}
+
+function compareWith(friendId: string): void {
+  compareOpen.value = false
+  const a = points.get(selectedFriendId.value!)
+  const b = points.get(friendId)
+  if (!a || !b) {
+    showNotice('Both friends need to be sharing their locations.')
+    return
+  }
+  const km = haversineKm(a.lat, a.lng, b.lat, b.lng)
+  distanceResult.value = {
+    aName: usernameFor(selectedFriendId.value!),
+    bName: usernameFor(friendId),
+    km,
+  }
+  compareWithId.value = friendId
+  drawDistanceLine(a, b)
+}
+
+
+/* =========================================================
+   MEET UP & TRIPS SHORTCUT
+   ========================================================= */
+
+async function meetUpWith(friendId: string): Promise<void> {
+  const name = `Meet up with ${usernameFor(friendId)}`
+  tripCreating.value = true
+  try {
+    const { trip } = await createTrip({ name, memberIds: [friendId] })
+    showNotice('Trip created — meet in the middle!')
+    await router.push(`/trips/${trip.id}`)
+  } catch (err) {
+    showNotice(
+      err instanceof Error ? err.message : 'Sorry, the trip could not be created',
+    )
+  } finally {
+    tripCreating.value = false
+  }
+}
+
+function goToTrips(): void {
+  void router.push('/trips')
 }
 
 
@@ -317,6 +468,7 @@ function updateMarker(point: Point): void {
 
 
   newMarker.on('click', () => {
+    clearMeasure()
     selectedFriendId.value = point.userId
   })
 
@@ -370,6 +522,10 @@ function receiveSnapshot(snapshot: Point[]): void {
 
 function stopViewing(userId: string): void {
   stoppedViewing.add(userId)
+
+  if (selectedFriendId.value === userId) {
+    clearMeasure()
+  }
 
   if (!stoppedFriends.value.includes(userId)) {
     stoppedFriends.value.push(userId)
@@ -521,6 +677,10 @@ function startLocationWatch(): void {
       (position) => {
         const now = Date.now()
 
+        ownPoint.value = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        }
 
         /*
          * Keep the existing 5 second throttle.
@@ -899,6 +1059,7 @@ onMounted(async () => {
         if (update.online) {
           presence.setOnline(update.userId)
         } else {
+          presence.setLastSeen(update.userId, Number(update.lastSeen))
           presence.setOffline(update.userId)
         }
       },
@@ -910,10 +1071,12 @@ onMounted(async () => {
 
       (snapshot: {
         onlineUserIds: string[]
+        lastSeenByUserId?: Record<string, number>
       }) => {
 
         presence.applySnapshot(
           snapshot.onlineUserIds,
+          snapshot.lastSeenByUserId,
         )
       },
     )
@@ -993,6 +1156,8 @@ onBeforeUnmount(() => {
 
   historyLine?.remove()
 
+  clearMeasure()
+
 
   map?.remove()
 })
@@ -1035,7 +1200,52 @@ onBeforeUnmount(() => {
       </div>
 
 
+      <div class="map-find">
+        <input
+          v-model="friendSearch"
+          type="text"
+          placeholder="Find a friend…"
+          autocomplete="off"
+          @focus="friendSearchOpen = true"
+          @keydown.esc="friendSearchOpen = false"
+        />
+        <div
+          v-if="friendSearchOpen && friendSearch.trim()"
+          class="map-find-list"
+        >
+          <div
+            v-for="item in findableFriends"
+            :key="item.friend.id"
+            class="map-find-row"
+            role="button"
+            tabindex="0"
+            @click="selectSearchResult(item.friend.id)"
+            @keydown.enter="selectSearchResult(item.friend.id)"
+          >
+            <span class="map-find-avatar">
+              {{ item.friend.username.charAt(0).toUpperCase() }}
+            </span>
+            <span class="map-find-name">{{ item.friend.username }}</span>
+            <span
+              class="map-find-state"
+              :class="points.has(item.friend.id) ? 'sharing' : 'hidden'"
+            >
+              {{ points.has(item.friend.id) ? 'On the map' : 'Location hidden' }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+
       <div class="map-actions">
+
+        <button
+          class="button secondary"
+          type="button"
+          @click="goToTrips"
+        >
+          Trips
+        </button>
 
         <button
           class="button secondary history-toggle"
@@ -1301,6 +1511,95 @@ onBeforeUnmount(() => {
 
         </button>
 
+      </div>
+
+
+      <div v-if="distanceResult" class="friend-distance">
+        <strong>
+          {{ distanceResult.aName }} ↔ {{ distanceResult.bName }}
+        </strong>
+        <span>
+          {{ formatDistanceKm(distanceResult.km) }}
+        </span>
+        <button
+          class="friend-card-close"
+          type="button"
+          aria-label="Clear distance"
+          @click="clearMeasure"
+        >
+          ×
+        </button>
+      </div>
+
+
+      <div class="friend-card-actions secondary-actions">
+
+        <button
+          class="button subtle small"
+          type="button"
+          :disabled="!points.has(selectedFriendId!)"
+          title="Distance from your current position"
+          @click="distanceToMe"
+        >
+
+          Distance to me
+
+        </button>
+
+        <button
+          class="button subtle small"
+          type="button"
+          :disabled="!points.has(selectedFriendId!)"
+          @click="compareOpen = true"
+        >
+
+          Compare with…
+
+        </button>
+
+        <button
+          class="button subtle small"
+          type="button"
+          :disabled="tripCreating"
+          @click="meetUpWith(selectedFriendId!)"
+        >
+
+          {{ tripCreating ? 'Creating…' : 'Meet up with…' }}
+
+        </button>
+
+      </div>
+
+
+      <div v-if="compareOpen" class="friend-compare">
+        <p class="friend-compare-title">Compare distances</p>
+        <div
+          v-for="(item, index) in friends"
+          :key="item.id"
+          class="friend-compare-row"
+          :class="{ muted: !points.has(item.friend.id) }"
+          role="button"
+          tabindex="0"
+          @click="
+            item.friend.id !== selectedFriendId &&
+              compareWith(item.friend.id)
+          "
+          @keydown.enter="
+            item.friend.id !== selectedFriendId &&
+              compareWith(item.friend.id)
+          "
+        >
+          <span class="map-find-avatar">
+            {{ item.friend.username.charAt(0).toUpperCase() }}
+          </span>
+          <span class="map-find-name">{{ item.friend.username }}</span>
+          <span v-if="index >= 0" class="map-find-state">
+            {{ points.has(item.friend.id) ? 'On the map' : 'Location hidden' }}
+          </span>
+          <span v-if="item.friend.id === selectedFriendId" class="compare-self">
+            (self)
+          </span>
+        </div>
       </div>
 
     </div>

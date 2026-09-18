@@ -32,12 +32,22 @@ export class PresenceService {
 
   async getManyPresence(userIds: string[]): Promise<Map<string, boolean>> {
     if (userIds.length === 0) return new Map();
+    const snapshots = await this.getManySnapshots(userIds);
+    return new Map(
+      userIds.map((id) => [id, snapshots.get(id)?.online ?? false]),
+    );
+  }
+
+  async getManySnapshots(
+    userIds: string[],
+  ): Promise<Map<string, PresenceSnapshot>> {
+    if (userIds.length === 0) return new Map();
     const client = this.redis.getIoRedisClient();
     const values = await client.mget(userIds.map((id) => this.presenceKey(id)));
-    const result = new Map<string, boolean>();
+    const result = new Map<string, PresenceSnapshot>();
     userIds.forEach((id, index) => {
       const raw = values[index];
-      result.set(id, raw ? (JSON.parse(raw) as PresenceSnapshot).online : false);
+      if (raw) result.set(id, JSON.parse(raw) as PresenceSnapshot);
     });
     return result;
   }
@@ -45,6 +55,20 @@ export class PresenceService {
   async listOnlineUserIds(userIds: string[]): Promise<string[]> {
     const presence = await this.getManyPresence(userIds);
     return userIds.filter((id) => presence.get(id) === true);
+  }
+
+  async touchOnline(userId: string): Promise<void> {
+    const client = this.redis.getIoRedisClient();
+    const raw = await client.get(this.presenceKey(userId));
+    if (!raw) return;
+    const presence = JSON.parse(raw) as PresenceSnapshot;
+    if (!presence.online) return;
+    await client.set(
+      this.presenceKey(userId),
+      JSON.stringify({ online: true, lastSeen: Date.now() }),
+      'EX',
+      PRESENCE_TTL_SECONDS,
+    );
   }
 
   private async writePresence(userId: string, presence: PresenceSnapshot): Promise<void> {

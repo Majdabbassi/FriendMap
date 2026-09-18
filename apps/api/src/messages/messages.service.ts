@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { FriendshipsRepository } from '../friendships/friendships.repository';
 import { FriendshipsService } from '../friendships/friendships.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { MessagesRepository } from './messages.repository';
@@ -19,6 +20,7 @@ export class MessagesService {
   constructor(
     private readonly messagesRepository: MessagesRepository,
     private readonly friendshipsService: FriendshipsService,
+    private readonly friendshipsRepository: FriendshipsRepository,
     private readonly presenceService: PresenceService,
   ) {}
 
@@ -81,14 +83,63 @@ export class MessagesService {
   async conversations(userId: string) {
     const conversations = await this.messagesRepository.listConversations(userId);
 
-    const onlinePresence = await this.presenceService.getManyPresence(
+    const presenceSnapshots = await this.presenceService.getManySnapshots(
       conversations.map((c) => c.friendId),
     );
 
     return conversations.map((conversation) => ({
       ...conversation,
-      friendOnline: onlinePresence.get(conversation.friendId) ?? false,
+      friendOnline: presenceSnapshots.get(conversation.friendId)?.online ?? false,
+      friendLastSeen:
+        presenceSnapshots.get(conversation.friendId)?.lastSeen ?? null,
     }));
+  }
+
+  async searchMessages(userId: string, query: string, friendId?: string) {
+    const acceptedFriendIds =
+      await this.friendshipsRepository.findAcceptedFriendIds(userId);
+
+    if (friendId) {
+      if (!acceptedFriendIds.includes(friendId)) {
+        throw new ForbiddenException(
+          'You can only search conversations with accepted friends',
+        );
+      }
+      return this.messagesRepository.searchMessages(userId, query, [friendId]);
+    }
+
+    return this.messagesRepository.searchMessages(userId, query, acceptedFriendIds);
+  }
+
+  async deleteMessage(userId: string, messageId: string) {
+    const message = await this.messagesRepository.findMessageById(messageId);
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+    if (message.senderId !== userId && message.recipientId !== userId) {
+      throw new ForbiddenException('You are not part of this message');
+    }
+    if (message.deletedAt) return message;
+
+    return this.messagesRepository.softDelete(messageId);
+  }
+
+  async clearConversation(userId: string, friendId: string) {
+    const areFriends = await this.friendshipsService.areAcceptedFriends(
+      userId,
+      friendId,
+    );
+    if (!areFriends) {
+      throw new ForbiddenException(
+        'You can only clear conversations with accepted friends',
+      );
+    }
+
+    const deletedCount = await this.messagesRepository.softDeleteConversation(
+      userId,
+      friendId,
+    );
+    return { friendId, deletedCount };
   }
 
   async markConversationRead(userId: string, senderId: string) {

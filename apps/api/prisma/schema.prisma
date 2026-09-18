@@ -23,6 +23,28 @@ enum SharingListType {
   EXCEPT
 }
 
+enum TripStatus {
+  DRAFT
+  DECIDED
+  ARCHIVED
+}
+
+enum TripMeetupMode {
+  AUTO
+  FIXED
+}
+
+enum TripMemberRole {
+  ADMIN
+  MEMBER
+}
+
+enum TripInviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -43,6 +65,12 @@ model User {
 
   sentMessages     Message[] @relation("SentMessages")
   receivedMessages Message[] @relation("ReceivedMessages")
+
+  createdTrips         Trip[]        @relation("CreatedTrips")
+  tripMemberships      TripMember[]  @relation("TripMemberships")
+  sentTripInvites      TripInvite[]  @relation("TripInvitesSent")
+  receivedTripInvites  TripInvite[]  @relation("TripInvitesReceived")
+  tripMessages         TripMessage[] @relation("TripMessagesSent")
 
   @@index([email])
   @@index([username])
@@ -128,6 +156,7 @@ model Message {
   body          String?
   imageUrl      String?
   readAt        DateTime?
+  deletedAt     DateTime?
   createdAt     DateTime  @default(now())
 
   sender    User @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
@@ -135,4 +164,78 @@ model Message {
 
   @@index([senderId, recipientId, createdAt])
   @@index([recipientId, readAt])
+}
+
+model Trip {
+  id              String         @id @default(uuid())
+  name            String
+  createdById     String
+  status          TripStatus     @default(DRAFT)
+  meetupMode      TripMeetupMode @default(AUTO)
+  meetupLat       Float?
+  meetupLng       Float?
+  meetupName      String?
+  meetupFixedById String?
+  meetupProposalById  String?
+  meetupProposalLat   Float?
+  meetupProposalLng   Float?
+  meetupProposalName  String?
+  meetingTime     DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime       @default(now())
+
+  creator User @relation("CreatedTrips", fields: [createdById], references: [id], onDelete: Cascade)
+
+  members  TripMember[]
+  invites  TripInvite[]
+  messages TripMessage[]
+
+  @@index([createdById])
+}
+
+model TripMember {
+  id        String         @id @default(uuid())
+  tripId    String
+  userId    String
+  role      TripMemberRole @default(MEMBER)
+  joinedAt  DateTime       @default(now())
+  arrivedAt DateTime?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation("TripMemberships", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, userId])
+  @@index([userId])
+}
+
+model TripInvite {
+  id          String            @id @default(uuid())
+  tripId      String
+  fromId      String
+  toId        String
+  status      TripInviteStatus  @default(PENDING)
+  createdAt   DateTime          @default(now())
+  respondedAt DateTime?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  from User @relation("TripInvitesSent", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("TripInvitesReceived", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, toId])
+  @@index([toId])
+  @@index([status])
+}
+
+model TripMessage {
+  id        String    @id @default(uuid())
+  tripId    String
+  senderId  String
+  body      String
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  trip   Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  sender User @relation("TripMessagesSent", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, createdAt])
 }

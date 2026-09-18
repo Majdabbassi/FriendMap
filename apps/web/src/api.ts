@@ -159,6 +159,7 @@ export type ChatMessage = {
   imageUrl: string | null
   readAt: string | null
   createdAt: string
+  deletedAt: string | null
 }
 export type Conversation = {
   friendId: string
@@ -167,6 +168,192 @@ export type Conversation = {
   lastMessage: ChatMessage | null
   unreadCount: number
   friendOnline: boolean
+  friendLastSeen: number | null
 }
 export type PresenceUpdate = { userId: string; online: boolean; lastSeen: string }
-export type PresenceSnapshot = { onlineUserIds: string[] }
+export type PresenceSnapshot = {
+  onlineUserIds: string[]
+  lastSeenByUserId?: Record<string, number>
+}
+
+export type TripStatus = 'DRAFT' | 'DECIDED' | 'ARCHIVED'
+export type TripMeetupMode = 'AUTO' | 'FIXED'
+export type TripMemberRole = 'ADMIN' | 'MEMBER'
+
+export type Trip = {
+  id: string
+  name: string
+  status: TripStatus
+  meetupMode: TripMeetupMode
+  meetupLat: number | null
+  meetupLng: number | null
+  meetupName: string | null
+  meetupFixedById: string | null
+  meetupProposalById: string | null
+  meetupProposalLat: number | null
+  meetupProposalLng: number | null
+  meetupProposalName: string | null
+  meetingTime: string | null
+  createdById: string
+  createdAt: string
+  archivedAt: string | null
+}
+
+export type TripListItem = Trip & {
+  members: { userId: string; arrivedAt: string | null }[]
+  memberCount: number
+}
+
+export type TripMember = {
+  id: string
+  tripId: string
+  userId: string
+  role: TripMemberRole
+  joinedAt: string
+  arrivedAt: string | null
+  user?: User
+}
+
+export type TripInvite = {
+  id: string
+  tripId: string
+  fromId: string
+  toId: string
+  status: 'PENDING' | 'ACCEPTED' | 'DECLINED'
+  createdAt: string
+  respondedAt: string | null
+  trip?: Trip
+  from?: User
+}
+
+export type TripMessage = {
+  id: string
+  tripId: string
+  senderId: string
+  body: string
+  createdAt: string
+}
+
+export type TripDetail = Trip & {
+  members: TripMember[]
+  invites: TripInvite[]
+  memberCount?: number
+}
+
+export type CreateTripPayload = {
+  name: string
+  memberIds?: string[]
+  meetupLat?: number
+  meetupLng?: number
+  meetupName?: string
+  meetingTime?: string
+}
+
+export type SearchResult = ChatMessage
+
+export function searchMessages(q: string, friendId?: string): Promise<SearchResult[]> {
+  const params = new URLSearchParams({ q })
+  if (friendId) params.set('friendId', friendId)
+  return apiRequest<SearchResult[]>(`/messages/search?${params.toString()}`)
+}
+
+export async function deleteMessage(messageId: string): Promise<ChatMessage> {
+  return apiRequest<ChatMessage>(`/messages/${messageId}`, { method: 'DELETE' })
+}
+
+export async function clearConversation(
+  friendId: string,
+): Promise<{ deletedCount: number }> {
+  return apiRequest<{ deletedCount: number }>(
+    `/messages/conversation/${friendId}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function listTrips(): Promise<TripListItem[]> {
+  return apiRequest<TripListItem[]>('/trips')
+}
+
+export function listTripInvites(): Promise<TripInvite[]> {
+  return apiRequest<TripInvite[]>('/trips/invites')
+}
+
+export function getTrip(tripId: string): Promise<TripDetail> {
+  return apiRequest<TripDetail>(`/trips/${tripId}`)
+}
+
+export async function createTrip(
+  payload: CreateTripPayload,
+): Promise<{ trip: TripDetail; invites: TripInvite[] }> {
+  return apiRequest<{ trip: TripDetail; invites: TripInvite[] }>('/trips', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateTrip(
+  tripId: string,
+  payload: { name?: string; meetingTime?: string | null },
+): Promise<Trip> {
+  return apiRequest<Trip>(`/trips/${tripId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name: payload.name, meetingTime: payload.meetingTime }),
+  })
+}
+
+export function archiveTrip(tripId: string): Promise<Trip> {
+  return apiRequest<Trip>(`/trips/${tripId}/archive`, { method: 'POST' })
+}
+
+export function deleteTrip(tripId: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/trips/${tripId}`, { method: 'DELETE' })
+}
+
+export function leaveTrip(tripId: string): Promise<{ left: boolean }> {
+  return apiRequest<{ left: boolean }>(`/trips/${tripId}/leave`, { method: 'POST' })
+}
+
+export function inviteToTrip(tripId: string, friendId: string): Promise<TripInvite> {
+  return apiRequest<TripInvite>(`/trips/${tripId}/invites`, {
+    method: 'POST',
+    body: JSON.stringify({ friendId }),
+  })
+}
+
+export function respondToInvite(
+  inviteId: string,
+  accept: boolean,
+): Promise<TripInvite> {
+  return apiRequest<TripInvite>(`/trips/invites/${inviteId}/respond`, {
+    method: 'POST',
+    body: JSON.stringify({ accept }),
+  })
+}
+
+export async function setTripMeetup(
+  tripId: string,
+  spot: { lat: number; lng: number; name?: string },
+): Promise<{ trip: Trip; proposed: boolean }> {
+  return apiRequest<{ trip: Trip; proposed: boolean }>(`/trips/${tripId}/meetup`, {
+    method: 'POST',
+    body: JSON.stringify({ lat: spot.lat, lng: spot.lng, name: spot.name }),
+  })
+}
+
+export async function respondToMeetupProposal(
+  tripId: string,
+  accept: boolean,
+): Promise<Trip> {
+  return apiRequest<Trip>(`/trips/${tripId}/meetup/respond`, {
+    method: 'POST',
+    body: JSON.stringify({ accept }),
+  })
+}
+
+export function arriveAtTrip(tripId: string): Promise<TripMember> {
+  return apiRequest<TripMember>(`/trips/${tripId}/arrive`, { method: 'POST' })
+}
+
+export function getTripMessages(tripId: string): Promise<TripMessage[]> {
+  return apiRequest<TripMessage[]>(`/trips/${tripId}/messages`)
+}

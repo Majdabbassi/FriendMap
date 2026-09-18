@@ -4,6 +4,8 @@ import FriendsView from '../views/FriendsView.vue'
 import MapView from '../views/MapView.vue'
 import MessagesView from '../views/MessagesView.vue'
 import SharingView from '../views/SharingView.vue'
+import TripsView from '../views/TripsView.vue'
+import TripView from '../views/TripView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -14,6 +16,8 @@ const router = createRouter({
     { path: '/friends', component: FriendsView, meta: { requiresAuth: true } },
     { path: '/messages', component: MessagesView, meta: { requiresAuth: true } },
     { path: '/sharing', component: SharingView, meta: { requiresAuth: true } },
+    { path: '/trips', component: TripsView, meta: { requiresAuth: true } },
+    { path: '/trips/:id', component: TripView, meta: { requiresAuth: true } },
   ],
 })
 

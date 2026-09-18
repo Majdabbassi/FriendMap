@@ -6,6 +6,9 @@ import {
   apiRequest,
   apiUpload,
   getAccessToken,
+  clearConversation,
+  deleteMessage,
+  searchMessages,
   type ChatMessage,
   type Conversation,
   type Friendship,
@@ -41,8 +44,14 @@ const threadLoading = ref(false)
 const threadError = ref('')
 const socketError = ref('')
 
+const searchQuery = ref('')
+const searchResults = ref<ChatMessage[]>([])
+const searchOpen = ref(false)
+
 let socket: Socket | undefined
 let socketErrorTimer: ReturnType<typeof setTimeout> | undefined
+let searchDebounce: ReturnType<typeof setTimeout> | undefined
+let typingEmitTimer: ReturnType<typeof setTimeout> | undefined
 let scrollScheduled = false
 
 const friendMeta = new Map<string, { username: string; email: string }>()
@@ -143,6 +152,47 @@ function markRead(friendId: string): void {
 
 
 /* =========================================================
+   CONVERSATION SEARCH
+   ========================================================= */
+
+async function runSearch(): Promise<void> {
+  const q = searchQuery.value.trim()
+  if (q.length < 2) {
+    searchResults.value = []
+    searchOpen.value = false
+    return
+  }
+  try {
+    searchResults.value = await searchMessages(q)
+    searchOpen.value = true
+  } catch {
+    searchResults.value = []
+    searchOpen.value = false
+  }
+}
+
+function onSearchInput(): void {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    void runSearch()
+  }, 250)
+}
+
+function clearSearch(): void {
+  searchQuery.value = ''
+  searchResults.value = []
+  searchOpen.value = false
+}
+
+async function openSearchResult(message: ChatMessage): Promise<void> {
+  const friendId = otherPartyId(message)
+  clearSearch()
+  ensureConversation(friendId, 0)
+  await openConversation(friendId)
+}
+
+
+/* =========================================================
    MESSAGE HOOKS
    ========================================================= */
 
@@ -169,6 +219,7 @@ function ensureConversation(friendId: string, unreadCount: number): void {
     lastMessage: null,
     unreadCount,
     friendOnline: false,
+    friendLastSeen: null,
   })
 }
 
@@ -207,6 +258,84 @@ function handleReadReceipt({ senderId, readAt }: { senderId: string; readAt: str
       message.readAt = readAt
     }
   })
+}
+
+
+/* =========================================================
+   TYPING, DELETE & CLEAR
+   ========================================================= */
+
+function emitTyping(typing: boolean): void {
+  if (!activeFriendId.value || socket?.connected !== true) return
+  socket.emit('typing:update', { friendId: activeFriendId.value, typing })
+}
+
+function handleDraftInput(): void {
+  if (typingEmitTimer) {
+    clearTimeout(typingEmitTimer)
+    typingEmitTimer = undefined
+  }
+  if (activeFriendId.value && draft.value.trim()) {
+    emitTyping(true)
+  }
+  typingEmitTimer = setTimeout(() => emitTyping(false), 1200)
+}
+
+function lastSeenText(friendId: string): string {
+  const conversation = conversations.value.find((c) => c.friendId === friendId)
+  const stamp =
+    presence.lastSeen(friendId) ?? conversation?.friendLastSeen ?? null
+  if (stamp == null) return 'Offline'
+  const date = new Date(stamp)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) {
+    return `Last seen today at ${date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`
+  }
+  return `Last seen ${date.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  })}`
+}
+
+async function removeMessage(message: ChatMessage): Promise<void> {
+  if (message.senderId !== auth.userId) return
+  try {
+    const deleted = await deleteMessage(message.id)
+    const updated = messages.value.map((m) =>
+      m.id === message.id ? deleted : m,
+    )
+    messages.value = updated
+    const conversation = conversations.value.find(
+      (c) => c.friendId === otherPartyId(message),
+    )
+    if (conversation && conversation.lastMessage?.id === message.id) {
+      conversation.lastMessage = deleted
+    }
+  } catch (err) {
+    showSocketError(
+      err instanceof Error ? err.message : 'Sorry, the message could not be deleted',
+    )
+  }
+}
+
+async function clearThread(): Promise<void> {
+  const friendId = activeFriendId.value
+  if (!friendId) return
+  if (!window.confirm('Clear this conversation for everyone?')) return
+
+  try {
+    await clearConversation(friendId)
+    messages.value = []
+    const conversation = conversations.value.find((c) => c.friendId === friendId)
+    if (conversation) conversation.lastMessage = null
+  } catch (err) {
+    showSocketError(
+      err instanceof Error ? err.message : 'Sorry, the conversation could not be cleared',
+    )
+  }
 }
 
 
@@ -367,12 +496,32 @@ function connectSocket(): void {
   socket.on('message:new', handleIncomingMessage)
   socket.on('message:sent', handleSentMessage)
   socket.on('message:read', handleReadReceipt)
+  socket.on('message:deleted', (deleted: ChatMessage) => {
+    const existing = messages.value.find((m) => m.id === deleted.id)
+    if (existing) existing.deletedAt = deleted.deletedAt
+  })
+  socket.on(
+    'conversation:cleared',
+    ({ friendId }: { friendId: string }) => {
+      if (activeFriendId.value === friendId) messages.value = []
+      const conversation = conversations.value.find(
+        (c) => c.friendId === friendId,
+      )
+      if (conversation) conversation.lastMessage = null
+    },
+  )
+  socket.on(
+    'typing:update',
+    ({ friendId, typing }: { friendId: string; typing: boolean }) => {
+      chat.setTyping(friendId, typing)
+    },
+  )
   socket.on('presence:update', (update: PresenceUpdate) => {
     if (update.online) presence.setOnline(update.userId)
     else presence.setOffline(update.userId)
   })
   socket.on('presence:snapshot', (snapshot: PresenceSnapshot) => {
-    presence.applySnapshot(snapshot.onlineUserIds)
+    presence.applySnapshot(snapshot.onlineUserIds, snapshot.lastSeenByUserId)
   })
   socket.on('message:error', ({ message }: { message: string }) => {
     showSocketError(message)
@@ -405,7 +554,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (socketErrorTimer) clearTimeout(socketErrorTimer)
+  if (searchDebounce) clearTimeout(searchDebounce)
+  if (typingEmitTimer) clearTimeout(typingEmitTimer)
   clearImagePending()
+  emitTyping(false)
   chat.setOpenThread(null)
   socket?.disconnect()
   socket = undefined
@@ -440,6 +592,61 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
+        <div class="conversation-search">
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search messages…"
+            autocomplete="off"
+            @input="onSearchInput"
+            @focus="searchOpen = true"
+            @keydown.esc="clearSearch"
+          />
+          <button
+            v-if="searchQuery"
+            class="friend-card-close"
+            type="button"
+            aria-label="Clear search"
+            @click="clearSearch"
+          >
+            ×
+          </button>
+        </div>
+
+        <div v-if="searchOpen" class="conversation-search-list">
+          <p v-if="searchQuery.trim().length < 2" class="hint">
+            Type at least 2 characters to search.
+          </p>
+          <p v-else-if="!searchResults.length" class="hint">No matches.</p>
+          <div
+            v-for="result in searchResults"
+            :key="result.id"
+            class="list-row search-row"
+            role="button"
+            tabindex="0"
+            @click="openSearchResult(result)"
+            @keydown.enter="openSearchResult(result)"
+          >
+            <div class="conversation-avatar">
+              {{
+                friendMeta.get(otherPartyId(result))?.username
+                  ?.charAt(0)
+                  .toUpperCase() ?? '?'
+              }}
+            </div>
+            <div class="conversation-info">
+              <span class="conversation-name">
+                {{
+                  friendMeta.get(otherPartyId(result))?.username ?? 'Unknown'
+                }}
+              </span>
+              <span class="conversation-preview">
+                {{ conversationPreview(result) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <div v-if="!conversations.length" class="empty">
           <p>No conversations yet.</p>
           <button
@@ -472,7 +679,15 @@ onBeforeUnmount(() => {
           <div class="conversation-info">
             <span class="conversation-name">{{ conversation.friendUsername }}</span>
             <span class="conversation-preview">
-              {{ conversationPreview(conversation.lastMessage) }}
+              <span v-if="chat.isTyping(conversation.friendId)" class="typing-hint">
+                typing…
+              </span>
+              <span v-else-if="conversation.lastMessage?.deletedAt">
+                Message deleted
+              </span>
+              <span v-else>
+                {{ conversationPreview(conversation.lastMessage) }}
+              </span>
             </span>
           </div>
 
@@ -502,13 +717,26 @@ onBeforeUnmount(() => {
                 {{ activeFriendName }}
               </span>
               <span class="conversation-preview">
-                {{
-                  presence.isOnline(activeFriendId)
-                    ? 'Online'
-                    : 'Offline'
-                }}
+                <span v-if="chat.isTyping(activeFriendId)" class="typing-hint">
+                  typing…
+                </span>
+                <span v-else-if="presence.isOnline(activeFriendId)">
+                  Online
+                </span>
+                <span v-else>
+                  {{ lastSeenText(activeFriendId) }}
+                </span>
               </span>
             </div>
+            <button
+              class="button subtle small"
+              type="button"
+              :disabled="!messages.length"
+              title="Clear conversation for everyone"
+              @click="clearThread"
+            >
+              Clear
+            </button>
           </div>
 
           <div ref="threadEl" class="thread-scroll">
@@ -521,21 +749,41 @@ onBeforeUnmount(() => {
               class="message-row"
               :class="{ own: message.senderId === auth.userId }"
             >
-              <div class="message-bubble">
-                <img
-                  v-if="message.imageUrl"
-                  :src="imageSrc(message)"
-                  class="message-image"
-                  :alt="message.body ?? 'Photo message'"
-                />
-                <span v-if="message.body">{{ message.body }}</span>
-                <span class="message-meta">
-                  {{ formatChatTime(message.createdAt) }}
-                  <span v-if="message.senderId === auth.userId">
-                    <template v-if="message.readAt">read</template>
-                    <template v-else>sent</template>
+              <button
+                v-if="
+                  message.senderId === auth.userId &&
+                  !message.deletedAt
+                "
+                class="message-delete"
+                type="button"
+                title="Delete for everyone"
+                @click="removeMessage(message)"
+              >
+                ×
+              </button>
+              <div
+                class="message-bubble"
+                :class="{ deleted: message.deletedAt }"
+              >
+                <template v-if="message.deletedAt">
+                  <span class="message-deleted-text">Message deleted</span>
+                </template>
+                <template v-else>
+                  <img
+                    v-if="message.imageUrl"
+                    :src="imageSrc(message)"
+                    class="message-image"
+                    :alt="message.body ?? 'Photo message'"
+                  />
+                  <span v-if="message.body">{{ message.body }}</span>
+                  <span class="message-meta">
+                    {{ formatChatTime(message.createdAt) }}
+                    <span v-if="message.senderId === auth.userId">
+                      <template v-if="message.readAt">read</template>
+                      <template v-else>sent</template>
+                    </span>
                   </span>
-                </span>
+                </template>
               </div>
             </div>
 
@@ -562,6 +810,7 @@ onBeforeUnmount(() => {
               maxlength="2000"
               placeholder="Write a message…"
               autocomplete="off"
+              @input="handleDraftInput"
             />
             <button
               class="button subtle attach-button"
