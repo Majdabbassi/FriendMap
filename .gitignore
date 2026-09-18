@@ -38,3 +38,6 @@ apps/web/.vite/
 
 # Graph analysis output
 graphify-out/
+
+# Chat image attachments
+uploads/

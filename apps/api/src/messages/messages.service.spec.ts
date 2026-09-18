@@ -81,84 +81,35 @@ describe('MessagesService', () => {
       friendshipsService.areAcceptedFriends.mockResolvedValue(true);
       repository.save.mockResolvedValue({ id: 'msg-img' });
 
-      const pngMagic = Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      ]).toString('base64');
-
       await service.send(alice, {
         recipientId: bob,
-        imageContentType: 'image/png',
-        imageData: pngMagic,
+        imageUrl: '/uploads/6b29fc40-1111-2222-3333-444455556666.png',
       });
 
-      expect(repository.save).toHaveBeenCalledWith(alice, bob, null, {
-        imageContentType: 'image/png',
-        imageData: pngMagic,
-      });
+      expect(repository.save).toHaveBeenCalledWith(
+        alice,
+        bob,
+        null,
+        '/uploads/6b29fc40-1111-2222-3333-444455556666.png',
+      );
     });
 
     it('persists an image alongside a caption', async () => {
       friendshipsService.areAcceptedFriends.mockResolvedValue(true);
       repository.save.mockResolvedValue({ id: 'msg-caption' });
 
-      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64');
-
       await service.send(alice, {
         recipientId: bob,
         body: 'check this out',
-        imageContentType: 'image/jpeg',
-        imageData: jpeg,
+        imageUrl: '/uploads/6b29fc40-1111-2222-3333-444455556666.jpg',
       });
 
-      expect(repository.save).toHaveBeenCalledWith(alice, bob, 'check this out', {
-        imageContentType: 'image/jpeg',
-        imageData: jpeg,
-      });
-    });
-
-    it('rejects HTML content disguised as an image', async () => {
-      friendshipsService.areAcceptedFriends.mockResolvedValue(true);
-
-      const html = Buffer.from('<html><script>alert(1)</script></html>').toString(
-        'base64',
+      expect(repository.save).toHaveBeenCalledWith(
+        alice,
+        bob,
+        'check this out',
+        '/uploads/6b29fc40-1111-2222-3333-444455556666.jpg',
       );
-
-      await expect(
-        service.send(alice, {
-          recipientId: bob,
-          imageContentType: 'image/png',
-          imageData: html,
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(repository.save).not.toHaveBeenCalled();
-    });
-
-    it('rejects declared image types that do not match the file bytes', async () => {
-      friendshipsService.areAcceptedFriends.mockResolvedValue(true);
-
-      const gifBytes = Buffer.from('GIF89a').toString('base64');
-
-      await expect(
-        service.send(alice, {
-          recipientId: bob,
-          imageContentType: 'image/webp',
-          imageData: gifBytes,
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(repository.save).not.toHaveBeenCalled();
-    });
-
-    it('rejects malformed base64 image data', async () => {
-      friendshipsService.areAcceptedFriends.mockResolvedValue(true);
-
-      await expect(
-        service.send(alice, {
-          recipientId: bob,
-          imageContentType: 'image/png',
-          imageData: 'not base64!!! +++',
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(repository.save).not.toHaveBeenCalled();
     });
   });
 

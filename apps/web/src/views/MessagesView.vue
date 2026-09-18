@@ -4,6 +4,7 @@ import { io, type Socket } from 'socket.io-client'
 import {
   apiBaseUrl,
   apiRequest,
+  apiUpload,
   getAccessToken,
   type ChatMessage,
   type Conversation,
@@ -13,12 +14,7 @@ import {
 } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { usePresenceStore } from '../stores/presence'
-import {
-  CHAT_IMAGE_TYPES,
-  MAX_IMAGE_BYTES,
-  dataUrlImageData,
-  useChatStore,
-} from '../stores/chat'
+import { CHAT_IMAGE_TYPES, MAX_IMAGE_BYTES, useChatStore } from '../stores/chat'
 
 const auth = useAuthStore()
 const presence = usePresenceStore()
@@ -33,7 +29,8 @@ const threadEl = ref<HTMLElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const imagePending = ref<{ contentType: string; dataUrl: string; name: string } | null>(null)
+const imagePending = ref<{ file: File; preview: string; name: string } | null>(null)
+const sending = ref(false)
 
 const showFriendPicker = ref(false)
 const friendSearch = ref('')
@@ -95,12 +92,12 @@ function formatChatTime(iso: string): string {
 
 function conversationPreview(message: ChatMessage | null): string {
   if (!message) return 'No messages yet'
-  const base = message.body ?? (message.imageContentType ? '📷 Photo' : '')
+  const base = message.body ?? (message.imageUrl ? '📷 Photo' : '')
   return `${message.senderId === auth.userId ? 'You: ' : ''}${base}`
 }
 
 function imageSrc(message: ChatMessage): string {
-  return `data:${message.imageContentType};base64,${message.imageData}`
+  return `${apiBaseUrl}${message.imageUrl}`
 }
 
 function showSocketError(message: string): void {
@@ -272,31 +269,45 @@ function startConversation(friendId: string): void {
    SENDING
    ========================================================= */
 
-function send(): void {
+async function send(): Promise<void> {
   if (!activeFriendId.value || socket?.connected !== true) return
+  if (sending.value) return
   const body = draft.value.trim()
   const image = imagePending.value
   if (!body && !image) return
 
-  const payload: Record<string, string> = { recipientId: activeFriendId.value }
-  if (body) payload.body = body
-  if (image) {
-    payload.imageContentType = image.contentType
-    payload.imageData = dataUrlImageData(image.dataUrl)
-  }
+  sending.value = true
+  try {
+    let imageUrl: string | undefined
+    if (image) {
+      const uploaded = await apiUpload<{ url: string }>(
+        '/messages/attachments',
+        image.file,
+      )
+      imageUrl = uploaded.url
+    }
 
-  draft.value = ''
-  imagePending.value = null
-  socket.emit('message:send', payload)
+    const payload: Record<string, string> = { recipientId: activeFriendId.value }
+    if (body) payload.body = body
+    if (imageUrl) payload.imageUrl = imageUrl
+
+    draft.value = ''
+    clearImagePending()
+    socket.emit('message:send', payload)
+  } catch (err) {
+    showSocketError(
+      err instanceof Error ? err.message : 'Sorry, the image could not be sent',
+    )
+  } finally {
+    sending.value = false
+  }
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(new Error('Could not read the image'))
-    reader.readAsDataURL(file)
-  })
+function clearImagePending(): void {
+  if (imagePending.value?.preview) {
+    URL.revokeObjectURL(imagePending.value.preview)
+  }
+  imagePending.value = null
 }
 
 async function onImagePicked(event: Event): Promise<void> {
@@ -314,21 +325,16 @@ async function onImagePicked(event: Event): Promise<void> {
     return
   }
 
-  try {
-    imagePending.value = {
-      contentType: file.type,
-      dataUrl: await readFileAsDataUrl(file),
-      name: file.name,
-    }
-  } catch (err) {
-    showSocketError(
-      err instanceof Error ? err.message : 'Could not read the image',
-    )
+  clearImagePending()
+  imagePending.value = {
+    file,
+    preview: URL.createObjectURL(file),
+    name: file.name,
   }
 }
 
 function removeImage(): void {
-  imagePending.value = null
+  clearImagePending()
 }
 
 
@@ -399,6 +405,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (socketErrorTimer) clearTimeout(socketErrorTimer)
+  clearImagePending()
   chat.setOpenThread(null)
   socket?.disconnect()
   socket = undefined
@@ -516,10 +523,10 @@ onBeforeUnmount(() => {
             >
               <div class="message-bubble">
                 <img
-                  v-if="message.imageContentType && message.imageData"
+                  v-if="message.imageUrl"
                   :src="imageSrc(message)"
                   class="message-image"
-                  :alt="message.body ?? ''"
+                  :alt="message.body ?? 'Photo message'"
                 />
                 <span v-if="message.body">{{ message.body }}</span>
                 <span class="message-meta">
@@ -539,7 +546,7 @@ onBeforeUnmount(() => {
 
           <form class="message-composer" @submit.prevent="send">
             <div v-if="imagePending" class="image-chip">
-              <img :src="imagePending.dataUrl" alt="" class="image-chip-thumb" />
+              <img :src="imagePending.preview" alt="" class="image-chip-thumb" />
               <span class="image-chip-name">{{ imagePending.name }}</span>
               <button
                 class="friend-card-close"
@@ -590,9 +597,11 @@ onBeforeUnmount(() => {
             <button
               class="button primary"
               type="submit"
-              :disabled="(!draft.trim() && !imagePending) || connection !== 'live'"
+              :disabled="
+                (!draft.trim() && !imagePending) || connection !== 'live' || sending
+              "
             >
-              Send
+              {{ sending ? 'Sending…' : 'Send' }}
             </button>
           </form>
         </template>

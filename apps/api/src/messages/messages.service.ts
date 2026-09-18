@@ -5,12 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FriendshipsService } from '../friendships/friendships.service';
-import { decodeImage, sniffImageType } from './image-validator';
 import { SendMessageDto } from './dto/send-message.dto';
 import { MessagesRepository } from './messages.repository';
 import { PresenceService } from './presence.service';
-
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
 export type ConversationQuery = {
   before?: string;
@@ -31,11 +28,7 @@ export class MessagesService {
     }
 
     const body = dto.body?.trim();
-    const image = dto.imageData
-      ? this.validateImage(dto.imageData, dto.imageContentType)
-      : undefined;
-
-    if (!body && !image) {
+    if (!body && !dto.imageUrl) {
       throw new BadRequestException(
         'A message needs text, an image, or both',
       );
@@ -53,40 +46,8 @@ export class MessagesService {
       userId,
       dto.recipientId,
       body ?? null,
-      image,
+      dto.imageUrl,
     );
-  }
-
-  private validateImage(
-    imageData: string,
-    contentType: string | undefined,
-  ): { imageContentType: string; imageData: string } {
-    if (!contentType) {
-      throw new BadRequestException('Image content type is required');
-    }
-
-    let buffer: Buffer;
-    try {
-      buffer = decodeImage(imageData);
-    } catch (error) {
-      throw new BadRequestException(
-        error instanceof Error ? error.message : 'Invalid image data',
-      );
-    }
-    if (buffer.byteLength === 0 || buffer.byteLength > MAX_IMAGE_BYTES) {
-      throw new BadRequestException(
-        'Image must be between 1 byte and 3 MB after decoding',
-      );
-    }
-
-    const sniffed = sniffImageType(buffer);
-    if (sniffed !== contentType) {
-      throw new BadRequestException(
-        'Unsupported or mismatched image type: only PNG, JPEG, GIF, and WebP are allowed',
-      );
-    }
-
-    return { imageContentType: sniffed, imageData };
   }
 
   async conversation(userId: string, friendId: string, query: ConversationQuery = {}) {

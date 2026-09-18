@@ -113,60 +113,72 @@ describe('Chat + presence (e2e)', () => {
     }
   });
 
-  it('delivers an image message and persists it', async () => {
+  it('uploads an image attachment, delivers it as a link, and serves it', async () => {
     const alice = await connectAs(aliceToken);
     const bob = await connectAs(bobToken);
 
     try {
       const bobFriendId = await friendId(aliceToken, 'bob');
-      const pngMagic = Buffer.from([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      ]).toString('base64');
+      const png = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.from('synthetic-image-bytes'),
+      ]);
+
+      const upload = await request(app.getHttpServer())
+        .post('/messages/attachments')
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .attach('file', png, 'photo.png')
+        .expect(201);
+      const url = (upload.body as { url: string }).url;
+      expect(url).toMatch(/^\/uploads\/.+\.png$/);
+
+      await request(app.getHttpServer()).get(url).expect(200);
 
       const received = await new Promise<{
-        id: string;
-        body: string | null;
-        imageContentType: string | null;
-        imageData: string | null;
+        senderId: string;
+        imageUrl: string;
       }>((resolve, reject) => {
         const timer = setTimeout(
-          () => reject(new Error('no image message:new received')),
+          () => {
+            clearTimeout(timer);
+            reject(new Error('no image message:new received'));
+          },
           3000,
         );
         bob.once('message:new', (data) => {
           clearTimeout(timer);
-          resolve(data as {
-            id: string;
-            body: string | null;
-            imageContentType: string | null;
-            imageData: string | null;
-          });
+          resolve(data as { senderId: string; imageUrl: string });
         });
         alice.emit('message:send', {
           recipientId: bobFriendId,
           body: 'a photo',
-          imageContentType: 'image/png',
-          imageData: pngMagic,
+          imageUrl: url,
         });
       });
 
-      expect(received.body).toBe('a photo');
-      expect(received.imageContentType).toBe('image/png');
-      expect(received.imageData).toBe(pngMagic);
+      expect(received.imageUrl).toBe(url);
 
       const history = await request(app.getHttpServer())
         .get(`/messages/${received.senderId}`)
         .set('Authorization', `Bearer ${bobToken}`)
         .expect(200);
-      expect(history.body as { imageContentType: string }[]).toEqual(
+      expect(history.body as { imageUrl: string }[]).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ imageContentType: 'image/png' }),
+          expect.objectContaining({ imageUrl: url, body: 'a photo' }),
         ]),
       );
     } finally {
       alice.disconnect();
       bob.disconnect();
     }
+  });
+
+  it('rejects uploading a non-image file', async () => {
+    await request(app.getHttpServer())
+      .post('/messages/attachments')
+      .set('Authorization', `Bearer ${aliceToken}`)
+      .attach('file', Buffer.from('<html><script>alert(1)</script></html>'), 'page.html')
+      .expect(400);
   });
 
   it('forbids messaging non-friends', async () => {

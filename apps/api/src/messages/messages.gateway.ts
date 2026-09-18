@@ -23,7 +23,6 @@ type JwtPayload = { sub: string };
     origin: corsOrigins(),
     credentials: true,
   },
-  maxHttpBufferSize: 6_000_000,
 })
 export class MessagesGateway {
   @WebSocketServer()

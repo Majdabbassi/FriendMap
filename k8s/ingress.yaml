@@ -16,7 +16,7 @@ spec:
     http:
       paths:
       # API routes (HTTP + Socket.IO). Paths are passed through unchanged.
-      - path: /(auth|health|friendships|sharing|location|socket\.io).*
+      - path: /(auth|health|friendships|sharing|location|messages|uploads|socket\.io).*
         pathType: ImplementationSpecific
         backend:
           service:

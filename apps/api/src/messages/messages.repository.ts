@@ -54,16 +54,14 @@ export class MessagesRepository {
     senderId: string,
     recipientId: string,
     body: string | null,
-    image?: { imageContentType: string; imageData: string } | undefined,
+    imageUrl?: string | null,
   ): Promise<Message> {
     return this.prisma.message.create({
       data: {
         senderId,
         recipientId,
         body,
-        ...(image
-          ? { imageContentType: image.imageContentType, imageData: image.imageData }
-          : {}),
+        ...(imageUrl ? { imageUrl } : {}),
       },
     });
   }

@@ -1,4 +1,3 @@
 -- AlterTable
-ALTER TABLE "Message" ADD COLUMN     "imageContentType" TEXT,
-ADD COLUMN     "imageData" TEXT,
+ALTER TABLE "Message" ADD COLUMN     "imageUrl" TEXT,
 ALTER COLUMN "body" DROP NOT NULL;

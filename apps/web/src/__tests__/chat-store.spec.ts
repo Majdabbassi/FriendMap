@@ -9,8 +9,7 @@ function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
     senderId: 'bob',
     recipientId: 'me',
     body: 'hello',
-    imageContentType: null,
-    imageData: null,
+    imageUrl: null,
     readAt: null,
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -72,8 +71,7 @@ describe('chat store', () => {
       message({
         senderId: 'bob',
         body: null,
-        imageContentType: 'image/png',
-        imageData: 'aGVsbG8=',
+        imageUrl: '/uploads/6b29fc40-1111-2222-3333-444455556666.png',
       }),
     )
 

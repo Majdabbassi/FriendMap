@@ -1,3 +1,5 @@
+export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+
 export const ALLOWED_IMAGE_TYPES = [
   'image/png',
   'image/jpeg',
@@ -5,16 +7,25 @@ export const ALLOWED_IMAGE_TYPES = [
   'image/webp',
 ] as const;
 
-export function isAllowedImageType(contentType: string): boolean {
-  return (ALLOWED_IMAGE_TYPES as readonly string[]).includes(contentType);
+type ImageType = (typeof ALLOWED_IMAGE_TYPES)[number];
+
+const EXTENSION_BY_TYPE: Record<ImageType, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
+
+export function extensionForImageType(contentType: string): string | null {
+  return EXTENSION_BY_TYPE[contentType as ImageType] ?? null;
 }
 
 /**
- * Sniffs the declared image type straight from the file's magic bytes.
- * No client-supplied header is trusted: a GIF disguised as an HTML page
- * (or vice versa) is rejected because the bytes do not match.
+ * Sniffs the image type straight from the file's magic bytes.
+ * No client-supplied header is trusted: HTML disguised as an image
+ * (or an image declared as another type) is rejected.
  */
-export function sniffImageType(buffer: Buffer): string | null {
+export function sniffImageType(buffer: Buffer): ImageType | null {
   if (buffer.length >= 8) {
     const pngMagic = Buffer.from([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -38,13 +49,4 @@ export function sniffImageType(buffer: Buffer): string | null {
   }
 
   return null;
-}
-
-const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
-
-export function decodeImage(data: string): Buffer {
-  if (!BASE64_PATTERN.test(data)) {
-    throw new Error('Image data must be valid base64');
-  }
-  return Buffer.from(data, 'base64');
 }

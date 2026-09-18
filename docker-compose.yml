@@ -50,8 +50,11 @@ services:
       PORT: ${PORT:-3000}
       NODE_ENV: production
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      UPLOADS_DIR: /app/uploads
     ports:
       - "3000:3000"
+    volumes:
+      - api_uploads:/app/uploads
     restart: unless-stopped
 
   web:
@@ -71,3 +74,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  api_uploads:

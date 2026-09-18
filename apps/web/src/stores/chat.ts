@@ -18,11 +18,6 @@ export const CHAT_IMAGE_TYPES = [
 ] as const
 export const MAX_IMAGE_BYTES = 3 * 1024 * 1024
 
-export function dataUrlImageData(dataUrl: string): string {
-  const comma = dataUrl.indexOf(',')
-  return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
-}
-
 export const useChatStore = defineStore('chat', () => {
   const unreadFriendIds = ref<string[]>([])
   const lastMessage = ref<{

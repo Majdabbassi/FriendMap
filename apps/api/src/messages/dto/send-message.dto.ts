@@ -1,12 +1,14 @@
 import {
-  IsIn,
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { ALLOWED_IMAGE_TYPES } from '../image-validator';
+
+const IMAGE_URL_PATTERN =
+  /^\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/;
 
 export class SendMessageDto {
   @IsUUID()
@@ -19,11 +21,6 @@ export class SendMessageDto {
   body?: string;
 
   @IsOptional()
-  @IsIn(ALLOWED_IMAGE_TYPES)
-  imageContentType?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(4_200_000)
-  imageData?: string;
+  @Matches(IMAGE_URL_PATTERN)
+  imageUrl?: string;
 }

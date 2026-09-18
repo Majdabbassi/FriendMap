@@ -64,6 +64,11 @@ spec:
             secretKeyRef:
               name: friendmap-secrets
               key: REDIS_PASSWORD
+        - name: UPLOADS_DIR
+          value: "/data/uploads"
+        volumeMounts:
+        - name: uploads
+          mountPath: /data/uploads
         resources:
           requests:
             memory: "256Mi"
@@ -83,6 +88,10 @@ spec:
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 5
+      volumes:
+      - name: uploads
+        persistentVolumeClaim:
+          claimName: uploads-pvc
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001

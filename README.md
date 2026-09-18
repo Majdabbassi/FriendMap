@@ -144,7 +144,7 @@ VITE_API_URL=http://localhost:3000
 - **SharingListEntry**: owner/friend/listType (SELECTED or EXCEPT)
 - **RefreshToken**: JWT refresh tokens with expiration
 - **LocationHistoryPoint**: Sampled location history with 24-hour retention
-- **Message**: sender/recipient/body (optional)/readAt + validated image payload (content type + bytes), indexed for conversation queries
+- **Message**: sender/recipient/body (optional)/readAt + `imageUrl` pointing to a volume-stored attachment (PNG/JPEG/GIF/WebP, max 3 MB), indexed for conversation queries
 
 ## Real-time Design
 
@@ -175,7 +175,7 @@ The architecture is designed to scale horizontally rather than optimized against
 - **Environment Validation**: Required secrets are validated at boot; insecure defaults rejected
 - **Non-root Containers**: All containers run as non-root users
 - **Authorization Enforcement**: Friendship-checked on every HTTP, WebSocket, and history read
-- **Image Attachment Validation**: Images are sniffed by magic bytes against an allowlist (PNG/JPEG/GIF/WebP, max 3 MB), so HTML or scripts can't be disguised as attachments
+- **Image Attachment Validation**: Images are sniffed by magic bytes against an allowlist (PNG/JPEG/GIF/WebP, max 3 MB), so HTML or scripts can't be disguised as attachments. Files are stored on a Docker/Kubernetes volume under random UUID filenames and served from `/uploads/**` with immutable cache headers; the database keeps only the URL, never base64.
 
 ## Testing
 

@@ -49,6 +49,10 @@ class EnvironmentVariables {
   @IsString()
   @IsOptional()
   CORS_ORIGINS?: string;
+
+  @IsString()
+  @IsOptional()
+  UPLOADS_DIR?: string;
 }
 
 export function validate(config: Record<string, unknown>): EnvironmentVariables {

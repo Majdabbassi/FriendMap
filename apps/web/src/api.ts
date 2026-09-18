@@ -114,6 +114,39 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   return data as T
 }
 
+export async function apiUpload<T>(path: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.append('file', file)
+  const token = getAccessToken()
+
+  let response = await fetch(`${apiBaseUrl}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  })
+
+  if (response.status === 401 && getRefreshToken()) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      response = await fetch(`${apiBaseUrl}${path}`, {
+        method: 'POST',
+        headers: getAccessToken()
+          ? { Authorization: `Bearer ${getAccessToken()}` }
+          : {},
+        body: form,
+      })
+    } else {
+      invalidateSession()
+    }
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text || `Upload failed (${response.status})`)
+  }
+  return (await response.json()) as T
+}
+
 export type User = { id: string; username: string; email: string }
 export type Friendship = { id: string; status: string; friend: User }
 export type PendingFriendship = { id: string; requester: User }
@@ -123,8 +156,7 @@ export type ChatMessage = {
   senderId: string
   recipientId: string
   body: string | null
-  imageContentType: string | null
-  imageData: string | null
+  imageUrl: string | null
   readAt: string | null
   createdAt: string
 }
