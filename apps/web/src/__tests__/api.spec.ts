@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
+  apiBaseUrl,
   apiRequest,
   clearTokens,
   getAccessToken,
@@ -7,8 +8,6 @@ import {
   setAuthFailureHandler,
   setTokens,
 } from '../api'
-
-const API_URL = 'http://localhost:3000'
 
 describe('api.ts', () => {
   beforeEach(() => {
@@ -47,7 +46,7 @@ describe('api.ts', () => {
       const result = await apiRequest<{ id: string }>('/friends')
 
       expect(fetchMock).toHaveBeenCalledWith(
-        `${API_URL}/friends`,
+        `${apiBaseUrl}/friends`,
         expect.objectContaining({
           headers: expect.objectContaining({ Authorization: 'Bearer access-token' }),
         }),
