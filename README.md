@@ -1,6 +1,6 @@
 # FriendMap
 
-Real-time location sharing between friends, with privacy controls (Ghost / Everyone / Selected / Except-selected), fast revocation when a user changes who can see them — plus direct messaging and online presence between friends.
+Real-time location sharing between friends, with privacy controls (Ghost / Everyone / Selected / Except-selected), fast revocation when a user changes who can see them — plus direct messaging, online presence, and meetup planning (trips): invite friends, pick a meet-in-the-middle or fixed spot, and track who's arrived — live.
 
 Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO · Vue 3 · Pinia · Leaflet · Docker Compose · Kubernetes.
 
@@ -13,6 +13,10 @@ Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO
 - **Friendship Management**: Send, accept, reject, and remove friend requests
 - **Direct Messaging**: Real-time chat with friends, including read receipts and secure image attachments
 - **Online Presence**: See who's online, updated live via Redis-backed presence
+- **Meetup Planning (Trips)**: Plan meetups with friends — create a trip, invite accepted friends, propose a time, and archive or leave it when you're done
+- **Meet-In-The-Middle Spots**: On a trip, the default AUTO meetup is computed as the geographic center of all members; any member can pin a fixed location instead
+- **Live Trip Map**: Activating a trip on the main map streams every member's location into a trip layer — even friends who've otherwise disabled general sharing — with a meetup pin, proposal marker, and per-member "arrived" status updated in real time
+- **Arrival Tracking**: Members tap "I'm here" and arrivals stream to the whole group live
 - **Location History**: View your own 24-hour location history
 - **Location Validation**: Rejects stale, out-of-order, and implausible-speed points
 
@@ -100,6 +104,8 @@ VITE_API_URL=http://localhost:3000
 - Password: `password123`
 - Friendships: alice↔bob, alice↔carol, bob↔carol, bob↔dave, carol↔erin
 
+Log in as two accounts (e.g. alice + bob in separate browsers), then have alice create a trip and invite bob to exercise the full meetup flow: invitation accept, meet-in-the-middle spot, live trip map, and arrival tracking.
+
 ## Architecture
 
 ```
@@ -118,6 +124,7 @@ VITE_API_URL=http://localhost:3000
             │ Sharing       │
             │ Location      │
             │ Messages      │
+            │ Trips         │
             │ Health        │
             └───┬───────┬───┘
                 │       │
@@ -134,6 +141,7 @@ VITE_API_URL=http://localhost:3000
 - **Sharing**: Privacy settings, visibility logic (enforced on HTTP, WebSocket, and history reads)
 - **Location**: Real-time location updates, WebSocket gateway, history, validation
 - **Messages**: Real-time messaging with read receipts, image attachments, global unread badges + toasts, plus Redis-backed online presence
+- **Trips**: Meetup planning with friend invites (accept/decline), DRAFT → DECIDED → ARCHIVED lifecycle, auto meet-in-the-middle or fixed meetup points (with member proposals), meeting times, arrival tracking, per-trip chat, and a live trip map room
 - **Health**: Service health checks, monitoring endpoints
 - **Throttling**: Distributed rate limiting via Redis (HTTP routes and socket events)
 
@@ -144,14 +152,19 @@ VITE_API_URL=http://localhost:3000
 - **SharingListEntry**: owner/friend/listType (SELECTED or EXCEPT)
 - **RefreshToken**: JWT refresh tokens with expiration
 - **LocationHistoryPoint**: Sampled location history with 24-hour retention
-- **Message**: sender/recipient/body (optional)/readAt + `imageUrl` pointing to a volume-stored attachment (PNG/JPEG/GIF/WebP, max 3 MB), indexed for conversation queries
+- **Message**: sender/recipient/body (optional)/readAt + `imageUrl` pointing to a volume-stored attachment (PNG/JPEG/GIF/WebP, max 3 MB), indexed for conversation queries; soft-deletes via `deletedAt` with `message:deleted` live propagation
+- **Trip**: name, creator, status (DRAFT/DECIDED/ARCHIVED), meetup mode (AUTO meet-in-the-middle or FIXED point) with optional pending proposal (proposer + point), meeting time, archive timestamp
+- **TripMember**: per-trip role (ADMIN/MEMBER), joinedAt, and `arrivedAt` arrival tracking
+- **TripInvite**: from/to + status (PENDING/ACCEPTED/DECLINED) and respondedAt; membership overrides general sharing on the trip map
+- **TripMessage**: per-trip group chat (sender/body/createdAt) broadcast over the trip room
 
 ## Real-time Design
 
 - **Socket.IO Redis Adapter**: Enables horizontal scaling across multiple pods
-- **Room-based Broadcasting**: Each user has personal rooms for targeted updates (`user:{id}` for chat/presence, `location:{id}` for map viewers)
+- **Room-based Broadcasting**: Each user has personal rooms for targeted updates (`user:{id}` for chat/presence, `location:{id}` for map viewers), plus per-trip rooms (`trip:{id}`) for live trip updates
+- **Trip Rooms**: `trip:join` adds a member to the trip room *and* to every member's `location:{id}` room, so activating a trip on the map streams all members' live positions even when general sharing is off
 - **Visibility Enforcement**: Checked on connect, mode change, list change, and unfriend
-- **WebSocket Events**: `message:send` / `message:new` / `message:read`, plus `presence:update` / `presence:snapshot`
+- **WebSocket Events**: `message:send` / `message:new` / `message:read`, `presence:update` / `presence:snapshot`, and `trip:join` / `trip:joined` / `trip:leave` / `trip:update` / `trip:member-arrived` / `trip:chat` / `trip:chat-new` / `trip:typing`
 - **Presence via Redis**: Online state stored with a 90-second TTL, surfaced as snapshots to friends
 - **Rate Limiting**: Redis-based distributed limits for location updates, messaging, and message reads
 - **Location Validation**: Rejects future (>30s), stale (>5min), out-of-order, and implausible-speed (>500km/h) points
@@ -201,6 +214,7 @@ npm run build
 - Friendship access control (authenticated lists, empty pending inbox)
 - Socket.IO: rejected connections, location broadcast between friends, stop/resume viewing
 - Chat + presence: message delivery between friends with persistence, image-attachment delivery, messaging non-friends rejected, online/offline broadcast
+- Trips: full lifecycle (create → invite → accept → chat → meetup → arrive), membership enforcement, fixed meetup + proposal + apply-on-accept, trip chat over sockets, arrival endpoint, and `trip:join` room access
 
 **Unit coverage**
 - Auth service, refresh-token rotation
@@ -209,6 +223,7 @@ npm run build
 - Location validation (stale/future/out-of-order/implausible speed)
 - Location + messages gateways (connection, rate limiting, privacy, read receipts)
 - Presence service (online/offline state, snapshots)
+- Trips service (invite validation, admin-only archive/delete, meetup/proposal rules)
 - Web: API client token handling, Pinia auth/presence/chat stores
 
 ## Trade-offs

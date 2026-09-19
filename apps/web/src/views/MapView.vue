@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import L from 'leaflet'
 import 'leaflet.markercluster'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
@@ -10,9 +10,14 @@ import {
   apiRequest,
   createTrip,
   getAccessToken,
+  getTrip,
+  listTrips,
   type Friendship,
+  type TripDetail,
+  type TripListItem,
 } from '../api'
 import { usePresenceStore } from '../stores/presence'
+import { useAuthStore } from '../stores/auth'
 import { formatDistanceKm, haversineKm } from '../utils/distance'
 
 type Point = {
@@ -20,6 +25,13 @@ type Point = {
   lat: number
   lng: number
   accuracy?: number
+  updatedAt: number
+}
+
+type TripPoint = {
+  userId: string
+  lat: number
+  lng: number
   updatedAt: number
 }
 
@@ -43,6 +55,8 @@ function clusterGroupInternal(group: L.MarkerClusterGroup): L.MarkerClusterGroup
 
 const mapElement = ref<HTMLElement | null>(null)
 const presence = usePresenceStore()
+const auth = useAuthStore()
+const route = useRoute()
 const router = useRouter()
 
 const notice = ref('')
@@ -67,6 +81,18 @@ const distanceResult = ref<{
   km: number
 } | null>(null)
 const tripCreating = ref(false)
+
+const trips = ref<TripListItem[]>([])
+const tripPanelOpen = ref(false)
+const tripsLoading = ref(false)
+const activeTripId = ref<string | null>(null)
+const activeTrip = ref<TripDetail | null>(null)
+
+const tripMemberPoints = new Map<string, TripPoint>()
+const tripMemberMarkers = new Map<string, L.Marker>()
+let tripMeetupMarker: L.Marker | undefined
+let tripProposalMarker: L.Marker | undefined
+let tripFitDone = false
 
 const points = new Map<string, Point>()
 const markers = new Map<string, L.Marker>()
@@ -287,6 +313,290 @@ async function meetUpWith(friendId: string): Promise<void> {
 
 function goToTrips(): void {
   void router.push('/trips')
+}
+
+
+/* =========================================================
+   TRIP LAYER
+   ========================================================= */
+
+function tripStatusLabel(trip: TripListItem | TripDetail | null): string {
+  if (!trip) return ''
+  return trip.status === 'DRAFT'
+    ? 'Organizing'
+    : trip.status === 'DECIDED'
+      ? 'Go time'
+      : 'Archived'
+}
+
+const tripArrivalCount = computed(
+  () =>
+    activeTrip.value?.members.filter((member) => member.arrivedAt != null)
+      .length ?? 0,
+)
+
+const tripOnlineCount = computed(
+  () =>
+    activeTrip.value?.members.filter((member) => presence.isOnline(member.userId))
+      .length ?? 0,
+)
+
+function tripUsername(userId: string): string {
+  if (userId === auth.userId) return 'You'
+  return (
+    activeTrip.value?.members.find((m) => m.userId === userId)?.user?.username ??
+    friends.value.find((f) => f.friend.id === userId)?.friend.username ??
+    'Friend'
+  )
+}
+
+function tripMemberIds(): Set<string> {
+  return new Set(activeTrip.value?.members.map((m) => m.userId) ?? [])
+}
+
+function tripMedianPoint(): { lat: number; lng: number; count: number } | null {
+  const live = [...tripMemberPoints.values()].filter((p) => p.lat && p.lng)
+  if (live.length === 0) return null
+  const lat = live.reduce((sum, p) => sum + p.lat, 0) / live.length
+  const lng = live.reduce((sum, p) => sum + p.lng, 0) / live.length
+  return { lat, lng, count: live.length }
+}
+
+function tripMeetupPoint(): {
+  lat: number
+  lng: number
+  name: string
+  setBy: string | null
+} | null {
+  const t = activeTrip.value
+  if (!t) return null
+  if (t.meetupMode === 'FIXED' && t.meetupLat != null && t.meetupLng != null) {
+    return {
+      lat: t.meetupLat,
+      lng: t.meetupLng,
+      name: t.meetupName ?? 'Meetup spot',
+      setBy: t.meetupFixedById ? tripUsername(t.meetupFixedById) : null,
+    }
+  }
+  const median = tripMedianPoint()
+  if (!median) return null
+  return { lat: median.lat, lng: median.lng, name: 'Meet in the middle', setBy: null }
+}
+
+function tripProposalPoint(): {
+  lat: number
+  lng: number
+  name: string
+  by: string
+} | null {
+  const t = activeTrip.value
+  if (
+    !t?.meetupProposalById ||
+    t.meetupProposalLat == null ||
+    t.meetupProposalLng == null
+  ) {
+    return null
+  }
+  return {
+    lat: t.meetupProposalLat,
+    lng: t.meetupProposalLng,
+    name: t.meetupProposalName ?? 'New spot',
+    by: tripUsername(t.meetupProposalById),
+  }
+}
+
+function tripMeetupIcon(translucent = false): L.DivIcon {
+  const isFixed = activeTrip.value?.meetupMode === 'FIXED'
+  const bg = translucent
+    ? isFixed
+      ? '#c75034'
+      : '#257a66'
+    : isFixed
+      ? '#e56b4f'
+      : '#1b877a'
+  return L.divIcon({
+    className: 'map-trip-meetup',
+    html: `<div class="trip-pin" style="background:${bg}">
+      <div class="trip-pin-inner">M</div>
+      <div class="trip-pin-tip"></div>
+    </div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  })
+}
+
+function tripMemberIcon(userId: string): L.DivIcon {
+  const arrived = Boolean(
+    activeTrip.value?.members.find((m) => m.userId === userId)?.arrivedAt,
+  )
+  return L.divIcon({
+    className: 'map-trip-member-marker',
+    html: `<div class="trip-member-dot${arrived ? ' arrived' : ''}" style="background:${colorForUser(userId)}">
+      <span>${getInitial(userId)}</span>
+    </div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+  })
+}
+
+function drawTripLayer(): void {
+  if (!map) return
+  tripMemberMarkers.forEach((marker) => marker.remove())
+  tripMemberMarkers.clear()
+  tripMeetupMarker?.remove()
+  tripMeetupMarker = undefined
+  tripProposalMarker?.remove()
+  tripProposalMarker = undefined
+
+  const meetup = tripMeetupPoint()
+  if (meetup) {
+    tripMeetupMarker = L.marker([meetup.lat, meetup.lng], { icon: tripMeetupIcon() }).addTo(map)
+    tripMeetupMarker.bindTooltip(
+      meetup.setBy
+        ? `${meetup.name} · set by ${meetup.setBy}`
+        : `${meetup.name} · estimated from ${tripMedianPoint()?.count ?? 0}`,
+      { direction: 'top', offset: [0, -20] },
+    )
+  }
+
+  const proposal = tripProposalPoint()
+  if (proposal) {
+    tripProposalMarker = L.marker([proposal.lat, proposal.lng], {
+      icon: tripMeetupIcon(true),
+    }).addTo(map)
+    tripProposalMarker.bindTooltip(`${proposal.name} · proposed by ${proposal.by}`, {
+      direction: 'top',
+      offset: [0, -20],
+    })
+  }
+
+  for (const point of tripMemberPoints.values()) {
+    const marker = L.marker([point.lat, point.lng], {
+      icon: tripMemberIcon(point.userId),
+    }).addTo(map)
+    marker.bindTooltip(tripUsername(point.userId), {
+      direction: 'top',
+      offset: [0, -16],
+    })
+    tripMemberMarkers.set(point.userId, marker)
+  }
+
+  if (!tripFitDone) {
+    tripFitDone = true
+    fitTripBounds()
+  }
+}
+
+function fitTripBounds(): void {
+  if (!map) return
+  const points: [number, number][] = []
+  const meetup = tripMeetupPoint()
+  if (meetup) points.push([meetup.lat, meetup.lng])
+  const proposal = tripProposalPoint()
+  if (proposal) points.push([proposal.lat, proposal.lng])
+  for (const point of tripMemberPoints.values()) {
+    points.push([point.lat, point.lng])
+  }
+  if (points.length === 0) return
+  map.fitBounds(L.latLngBounds(points), {
+    padding: [54, 54],
+    maxZoom: 15,
+  })
+}
+
+function clearTripLayer(): void {
+  if (activeTripId.value) {
+    socket?.emit('trip:leave', { tripId: activeTripId.value })
+  }
+  tripMemberPoints.clear()
+  tripMemberMarkers.forEach((marker) => marker.remove())
+  tripMemberMarkers.clear()
+  tripMeetupMarker?.remove()
+  tripMeetupMarker = undefined
+  tripProposalMarker?.remove()
+  tripProposalMarker = undefined
+  activeTrip.value = null
+  activeTripId.value = null
+  tripFitDone = false
+}
+
+async function activateTrip(tripId: string | null): Promise<void> {
+  if (tripId && tripId === activeTripId.value) return
+  clearTripLayer()
+  if (!tripId) return
+  activeTripId.value = tripId
+  try {
+    activeTrip.value = await getTrip(tripId)
+    socket?.emit('trip:join', { tripId })
+    drawTripLayer()
+  } catch (err) {
+    showNotice(err instanceof Error ? err.message : 'Could not load the trip')
+    activeTripId.value = null
+  }
+}
+
+async function refreshActiveTrip(): Promise<void> {
+  if (!activeTripId.value) return
+  try {
+    activeTrip.value = await getTrip(activeTripId.value)
+    drawTripLayer()
+  } catch {
+    // Keep the last known copy if the fetch fails.
+  }
+}
+
+function openActiveTrip(): void {
+  if (!activeTripId.value) return
+  void router.push(`/trips/${activeTripId.value}`)
+}
+
+async function toggleTripPanel(): Promise<void> {
+  tripPanelOpen.value = !tripPanelOpen.value
+  if (tripPanelOpen.value && trips.value.length === 0) {
+    tripsLoading.value = true
+    try {
+      trips.value = await listTrips()
+    } catch {
+      trips.value = []
+    } finally {
+      tripsLoading.value = false
+    }
+  }
+}
+
+function selectTripRow(tripId: string): void {
+  if (activeTripId.value === tripId) {
+    void activateTrip(null)
+  } else {
+    void activateTrip(tripId)
+  }
+}
+
+function handleTripPoint(point: TripPoint): void {
+  if (!activeTripId.value) return
+  if (!tripMemberIds().has(point.userId)) return
+  tripMemberPoints.set(point.userId, point)
+  const existing = tripMemberMarkers.get(point.userId)
+  if (existing) {
+    existing.setLatLng([point.lat, point.lng])
+    existing.setIcon(tripMemberIcon(point.userId))
+    return
+  }
+  const marker = L.marker([point.lat, point.lng], {
+    icon: tripMemberIcon(point.userId),
+  }).addTo(map!)
+  marker.bindTooltip(tripUsername(point.userId), { direction: 'top', offset: [0, -16] })
+  tripMemberMarkers.set(point.userId, marker)
+}
+
+function handleTripHidden(userId: string): void {
+  if (!tripMemberPoints.has(userId)) return
+  tripMemberPoints.delete(userId)
+  const marker = tripMemberMarkers.get(userId)
+  if (marker && map) {
+    map.removeLayer(marker)
+    tripMemberMarkers.delete(userId)
+  }
 }
 
 
@@ -513,6 +823,10 @@ function receiveSnapshot(snapshot: Point[]): void {
 
     updateMarker(point)
   })
+
+  if (activeTripId.value) {
+    snapshot.forEach((point) => handleTripPoint(point))
+  }
 }
 
 
@@ -948,6 +1262,10 @@ onMounted(async () => {
 
         socket?.emit('presence:snapshot')
 
+        if (activeTripId.value) {
+          socket?.emit('trip:join', { tripId: activeTripId.value })
+        }
+
         startLocationWatch()
       },
     )
@@ -976,6 +1294,9 @@ onMounted(async () => {
             point.userId,
           )
         ) {
+          if (activeTripId.value) {
+            handleTripPoint(point)
+          }
           return
         }
 
@@ -986,6 +1307,10 @@ onMounted(async () => {
         )
 
         updateMarker(point)
+
+        if (activeTripId.value) {
+          handleTripPoint(point)
+        }
       },
     )
 
@@ -998,6 +1323,8 @@ onMounted(async () => {
       }: {
         userId: string
       }) => {
+
+        handleTripHidden(userId)
 
         const marker =
           markers.get(userId)
@@ -1043,6 +1370,77 @@ onMounted(async () => {
         showNotice(
           `Location update rejected: ${reason}`,
         )
+      },
+    )
+
+
+    socket.on(
+      'trip:joined',
+
+      (data: {
+        memberLocations: TripPoint[]
+      }) => {
+
+        if (!activeTripId.value) return
+
+        tripMemberPoints.clear()
+
+        for (const point of data.memberLocations ?? []) {
+          if (tripMemberIds().has(point.userId)) {
+            tripMemberPoints.set(point.userId, point)
+          }
+        }
+
+        drawTripLayer()
+      },
+    )
+
+
+    socket.on(
+      'trip:update',
+      () => {
+        if (activeTripId.value) {
+          void refreshActiveTrip()
+        }
+      },
+    )
+
+
+    socket.on(
+      'trip:member-arrived',
+
+      ({
+        userId,
+        arrivedAt,
+      }: {
+        userId: string
+        arrivedAt: string | null
+      }) => {
+
+        if (!activeTrip.value) return
+
+        activeTrip.value.members = activeTrip.value.members.map(
+          (member) =>
+            member.userId === userId
+              ? { ...member, arrivedAt }
+              : member,
+        )
+
+        const marker = tripMemberMarkers.get(userId)
+
+        if (marker) {
+          marker.setIcon(
+            tripMemberIcon(userId),
+          )
+        }
+      },
+    )
+
+
+    socket.on(
+      'trip:error',
+      ({ message }: { message: string }) => {
+        showNotice(message)
       },
     )
 
@@ -1125,6 +1523,17 @@ onMounted(async () => {
         : 'Could not load friends',
     )
   }
+
+  const requestedTrip =
+    typeof route.query.trip === 'string'
+      ? route.query.trip
+      : null
+
+  if (requestedTrip) {
+    void activateTrip(requestedTrip).then(() => {
+      router.replace({ path: '/map' })
+    })
+  }
 })
 
 
@@ -1150,6 +1559,10 @@ onBeforeUnmount(() => {
     clearTimeout(noticeTimer)
   }
 
+
+  if (activeTripId.value) {
+    socket?.emit('trip:leave', { tripId: activeTripId.value })
+  }
 
   socket?.disconnect()
 
@@ -1248,6 +1661,15 @@ onBeforeUnmount(() => {
         </button>
 
         <button
+          class="button secondary"
+          :class="{ active: tripPanelOpen }"
+          type="button"
+          @click="toggleTripPanel"
+        >
+          Trip layer
+        </button>
+
+        <button
           class="button secondary history-toggle"
           type="button"
           @click="toggleHistory"
@@ -1274,6 +1696,116 @@ onBeforeUnmount(() => {
       ref="mapElement"
       class="map-canvas"
     ></div>
+
+
+    <!-- ===============================================
+         TRIP LAYER PANEL
+         =============================================== -->
+
+    <div
+      v-if="tripPanelOpen"
+      class="map-trip-panel"
+    >
+      <div class="map-trip-panel-head">
+        <span>Trips on the map</span>
+        <button
+          class="friend-card-close"
+          type="button"
+          aria-label="Close trip layer panel"
+          @click="tripPanelOpen = false"
+        >
+          ×
+        </button>
+      </div>
+
+      <div
+        v-if="tripsLoading"
+        class="map-trip-panel-hint"
+      >
+        Loading…
+      </div>
+
+      <div
+        v-else-if="trips.length === 0"
+        class="map-trip-panel-hint"
+      >
+        No trips yet — plan one on the Trips page.
+      </div>
+
+      <div v-else class="map-trip-list">
+        <div
+          v-for="trip in trips"
+          :key="trip.id"
+          class="map-trip-row"
+          :class="{ active: activeTripId === trip.id }"
+          role="button"
+          tabindex="0"
+          @click="selectTripRow(trip.id)"
+          @keydown.enter="selectTripRow(trip.id)"
+        >
+          <span
+            class="map-trip-dot"
+            :class="trip.status.toLowerCase()"
+          ></span>
+          <span class="map-trip-row-name">{{ trip.name }}</span>
+          <span class="map-trip-row-state">
+            {{
+              activeTripId === trip.id
+                ? 'On map'
+                : trip.status === 'ARCHIVED'
+                  ? 'Archived'
+                  : 'Show'
+            }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ===============================================
+         ACTIVE TRIP BANNER
+         =============================================== -->
+
+    <div
+      v-if="activeTrip"
+      class="map-trip-banner"
+    >
+      <div class="map-trip-banner-title">
+        <span class="map-trip-banner-dot"></span>
+        <p class="map-trip-banner-name">{{ activeTrip.name }}</p>
+        <span
+          class="trip-status-chip"
+          :class="activeTrip.status.toLowerCase()"
+        >
+          {{ tripStatusLabel(activeTrip) }}
+        </span>
+      </div>
+      <p class="map-trip-banner-sub">
+        {{
+          activeTrip.meetupMode === 'AUTO'
+            ? 'Meet in the middle'
+            : activeTrip.meetupName ?? 'Meetup spot'
+        }}
+        &middot; {{ tripArrivalCount }} arrived &middot;
+        {{ tripOnlineCount }} online
+      </p>
+      <div class="map-trip-banner-actions">
+        <button
+          class="button subtle small"
+          type="button"
+          @click="openActiveTrip"
+        >
+          Open trip
+        </button>
+        <button
+          class="button subtle small"
+          type="button"
+          @click="selectTripRow(activeTripId!)"
+        >
+          Remove
+        </button>
+      </div>
+    </div>
 
 
     <!-- ===============================================

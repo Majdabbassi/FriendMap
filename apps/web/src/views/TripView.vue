@@ -315,7 +315,6 @@ watch(tripId, (id) => {
 })
 
 onMounted(() => {
-  setupMap()
   connectSocket()
   void loadFriends()
   void loadTrip()
@@ -472,7 +471,16 @@ function setupMap(): void {
     }
     renderDraftMarker()
   })
+
+  redrawMap()
 }
+
+watch(
+  () => trip.value,
+  () => {
+    void nextTick(() => setupMap())
+  },
+)
 
 function renderDraftMarker(): void {
   if (!map) return
@@ -813,10 +821,89 @@ async function leaveTripAction(): Promise<void> {
 
 function backToTrips(): void {
   void router.push('/trips')
-}</script>
+}
+
+
+/* =========================================================
+   DETAIL-ONLY HELPERS
+   ========================================================= */
+
+const phaseLabel = computed(() =>
+  trip.value?.status === 'DRAFT'
+    ? 'Organizing'
+    : trip.value?.status === 'DECIDED'
+      ? 'Go time'
+      : 'Archived',
+)
+
+const phaseIndex = computed(() =>
+  trip.value?.status === 'DRAFT'
+    ? 0
+    : trip.value?.status === 'DECIDED'
+      ? 1
+      : 2,
+)
+
+const organizerName = computed(() =>
+  trip.value ? usernameFor(trip.value.createdById) : '',
+)
+
+const arrivalCount = computed(
+  () => participants.value.filter((m) => m.arrived).length,
+)
+
+function createdLabel(): string {
+  if (!trip.value) return ''
+  return new Date(trip.value.createdAt).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function timeOf(value: string): number {
+  return new Date(value).getTime()
+}
+
+function countdownLabel(value: string): string {
+  const minutes = Math.round((new Date(value).getTime() - Date.now()) / 60_000)
+  if (Math.abs(minutes) < 1) return minutes >= 0 ? 'now' : 'just passed'
+  if (minutes > 0) {
+    if (minutes < 60) return `in ${minutes} min`
+    const hours = Math.floor(minutes / 60)
+    return hours < 24 ? `in ${hours} h` : `in ${Math.floor(hours / 24)} d`
+  }
+  const abs = Math.abs(minutes)
+  if (abs < 60) return `${abs} min ago`
+  const hours = Math.floor(abs / 60)
+  return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`
+}
+
+function showOnMap(): void {
+  if (!tripId.value) return
+  void router.push({ path: '/map', query: { trip: tripId.value } })
+}
+
+function fitAll(): void {
+  const currentMap = map
+  if (!currentMap) return
+  const points: [number, number][] = []
+  const meetup = meetupPoint.value
+  if (meetup) points.push([meetup.lat, meetup.lng])
+  const proposal = proposalPoint.value
+  if (proposal) points.push([proposal.lat, proposal.lng])
+  for (const point of memberPoints.value.values()) {
+    points.push([point.lat, point.lng])
+  }
+  if (points.length === 0) return
+  currentMap.fitBounds(L.latLngBounds(points), {
+    padding: [44, 44],
+    maxZoom: 15,
+  })
+}
+</script>
 <template>
-  <div class="trip-shell">
-    <div class="trip-topbar">
+<div class="trip-shell">
+    <div class="trip-topbar trip-detail-topbar">
       <button
         class="icon-button trip-back"
         type="button"
@@ -825,16 +912,32 @@ function backToTrips(): void {
       >
         &lsaquo;
       </button>
-      <div class="trip-title">
-        <h1>{{ trip?.name ?? "Trip" }}</h1>
-        <span
-          class="trip-status-chip"
-          :class="trip ? trip.status.toLowerCase() : ''"
-        >
-          {{ trip?.status ?? "loading" }}
-        </span>
+      <div class="trip-title trip-detail-title">
+        <p class="eyebrow">TRIP</p>
+        <div class="trip-detail-title-row">
+          <h1>{{ trip?.name ?? "Trip" }}</h1>
+          <span
+            class="trip-status-chip"
+            :class="trip ? trip.status.toLowerCase() : ''"
+          >
+            {{ phaseLabel }}
+          </span>
+        </div>
+        <p v-if="trip" class="trip-detail-meta">
+          {{ organizerName }} &middot; created {{ createdLabel() }} &middot;
+          {{ trip.members.length }}
+          {{ trip.members.length === 1 ? "person" : "people" }}
+        </p>
       </div>
-      <div class="trip-top-actions">
+      <div class="trip-top-actions trip-detail-actions">
+        <button
+          class="button subtle"
+          type="button"
+          :disabled="!trip"
+          @click="showOnMap"
+        >
+          Show on map
+        </button>
         <button
           v-if="isAdmin"
           class="button button-outline"
@@ -862,10 +965,45 @@ function backToTrips(): void {
       </div>
     </div>
 
+    <div v-if="trip" class="trip-phase">
+      <div
+        class="trip-phase-step"
+        :class="{
+          current: phaseIndex === 0,
+          done: phaseIndex > 0,
+        }"
+      >
+        <span>1</span>
+        <b>Organizing</b>
+      </div>
+      <i></i>
+      <div
+        class="trip-phase-step"
+        :class="{
+          current: phaseIndex === 1,
+          done: phaseIndex > 1,
+        }"
+      >
+        <span>2</span>
+        <b>Go time</b>
+      </div>
+      <i></i>
+      <div
+        class="trip-phase-step"
+        :class="{
+          current: phaseIndex === 2,
+          done: phaseIndex > 2,
+        }"
+      >
+        <span>3</span>
+        <b>Archived</b>
+      </div>
+    </div>
+
     <div v-if="notice" class="trip-notice">{{ notice }}</div>
 
-    <div v-if="loading" class="trip-empty">
-      <p class="hint">Loading trip�</p>
+<div v-if="loading" class="trip-empty">
+      <p class="hint">Loading trip…</p>
     </div>
 
     <div v-else-if="loadError" class="trip-empty">
@@ -877,7 +1015,31 @@ function backToTrips(): void {
 
     <template v-else-if="trip">
       <div class="trip-layout">
-        <section class="trip-left">
+<section class="trip-left">
+          <div class="trip-map-tools">
+            <div class="trip-legend">
+              <span class="trip-legend-item">
+                <i class="meetup"></i>
+                Meetup
+              </span>
+              <span class="trip-legend-item">
+                <i class="member"></i>
+                Members
+              </span>
+              <span v-if="proposalPoint" class="trip-legend-item">
+                <i class="proposal"></i>
+                Proposal
+              </span>
+            </div>
+            <button
+              class="button subtle small-button"
+              type="button"
+              :disabled="!hasLiveMemberLocations && !meetupPoint"
+              @click="fitAll"
+            >
+              Fit to everyone
+            </button>
+          </div>
           <div class="trip-map-wrap">
             <div ref="mapElement" class="trip-map"></div>
 
@@ -901,34 +1063,51 @@ function backToTrips(): void {
             </div>
           </div>
 
-          <div class="trip-card">
+<div class="trip-card">
             <div class="trip-card-head">
               <span class="trip-card-label">Meetup</span>
-              <span
-                class="trip-mode-chip"
-                :class="trip.meetupMode.toLowerCase()"
-              >
-                {{
-                  trip.meetupMode === "AUTO"
-                    ? "Meet in the middle"
-                    : "Fixed spot"
-                }}
+              <span class="trip-badge-row">
+                <span
+                  class="trip-mode-chip"
+                  :class="trip.meetupMode.toLowerCase()"
+                >
+                  {{
+                    trip.meetupMode === "AUTO"
+                      ? "Meet in the middle"
+                      : "Fixed spot"
+                  }}
+                </span>
               </span>
             </div>
 
             <template v-if="meetupPoint">
-              <p class="trip-card-title">{{ meetupPoint.name }}</p>
+              <p class="trip-spot-name">{{ meetupPoint.name }}</p>
+
               <p v-if="meetupPoint.setBy" class="trip-card-sub">
                 set by {{ meetupPoint.setBy }}
               </p>
-              <p
-                v-else-if="trip.meetupMode === 'AUTO'"
-                class="trip-card-sub"
-              >
-                moves with everyone &middot;
+              <p v-else-if="trip.meetupMode === 'AUTO'" class="trip-card-sub">
+                live middle point &middot; moves with everyone &middot;
                 {{ medianPoint?.count ?? 0 }} of
-                {{ participants.length }} members sharing
+                {{ participants.length }} sharing
               </p>
+              <p v-else class="trip-card-sub">
+                everyone heads to this exact spot.
+              </p>
+
+              <p
+                v-if="trip.meetupMode === 'AUTO'"
+                class="trip-live-line"
+                :class="{ dead: !hasLiveMemberLocations }"
+              >
+                <i></i>
+                {{
+                  hasLiveMemberLocations
+                    ? "Recalculating as people move"
+                    : "Waiting for locations to estimate the middle"
+                }}
+              </p>
+
               <div
                 v-if="trip.meetupMode === 'AUTO'"
                 class="trip-card-actions"
@@ -948,7 +1127,7 @@ function backToTrips(): void {
             </p>
 
             <div v-if="proposalPoint" class="trip-proposal">
-              <p class="trip-card-title">
+              <p class="trip-proposal-title">
                 {{ proposalPoint.name }} &middot; proposed by
                 {{ proposalPoint.by }}
               </p>
@@ -998,18 +1177,22 @@ function backToTrips(): void {
                 type="datetime-local"
                 @change="saveMeetingTime"
               />
-              <p
-                v-else
-                class="trip-card-title"
-              >
+              <p v-else class="trip-time-big">
                 {{ formatMeetingTime(trip.meetingTime) || "Not set yet" }}
               </p>
             </div>
-            <p v-if="isAdmin" class="trip-card-sub">
+            <p
+              v-if="trip.meetingTime"
+              class="trip-time-count"
+              :class="{ past: timeOf(trip.meetingTime) < Date.now() }"
+            >
+              {{ countdownLabel(trip.meetingTime) }}
+            </p>
+            <p v-else class="trip-card-sub">
               {{
-                trip.meetingTime
-                  ? formatMeetingTime(trip.meetingTime)
-                  : "Pick a time and everyone sees it."
+                isAdmin
+                  ? "Pick a time and everyone sees it."
+                  : "The organizer hasn't picked a time yet."
               }}
             </p>
           </div>
@@ -1019,7 +1202,7 @@ function backToTrips(): void {
             class="trip-card trip-arrive"
           >
             <div v-if="meArrived" class="trip-check">
-              You&rsquo;re here � let them know. ?
+              You&rsquo;re here — let them know!
             </div>
             <template v-else>
               <button
@@ -1030,14 +1213,19 @@ function backToTrips(): void {
                 I&rsquo;m here
               </button>
               <p class="trip-card-sub">
-                Everyone in the trip gets a &ldquo;arrived&rdquo; tag.
+                Everyone in the trip gets an &ldquo;arrived&rdquo; tag.
               </p>
             </template>
           </div>
 
-          <div class="trip-card">
+<div class="trip-card">
             <div class="trip-card-head">
-              <span class="trip-card-label">Participants</span>
+              <span class="trip-card-label">
+                Participants
+                <span class="trip-participants-count">
+                  {{ arrivalCount }} of {{ participants.length }} arrived
+                </span>
+              </span>
               <button
                 class="button button-outline small-button"
                 type="button"
@@ -1051,6 +1239,7 @@ function backToTrips(): void {
                 v-for="member in participants"
                 :key="member.userId"
                 class="trip-member-row"
+                :class="{ arrived: member.arrived }"
               >
                 <span
                   class="conversation-avatar trip-member-avatar"
@@ -1068,7 +1257,7 @@ function backToTrips(): void {
                       organizer
                     </span>
                     <span v-if="member.arrived" class="trip-role-chip arrived">
-                      arrived ?
+                      arrived ✓
                     </span>
                   </div>
                   <div class="trip-member-sub">
@@ -1135,7 +1324,7 @@ function backToTrips(): void {
               <input
                 v-model="draft"
                 type="text"
-                placeholder="Message the group�"
+                placeholder="Message the group…"
                 autocomplete="off"
                 :disabled="!socket?.connected"
                 @input="handleDraftInput"
@@ -1165,10 +1354,10 @@ function backToTrips(): void {
             <button
               class="friend-card-close"
               type="button"
-              aria-label="Close invite list"
+aria-label="Close invite list"
               @click="inviteModalOpen = false"
             >
-              �
+              ×
             </button>
           </div>
 
@@ -1194,7 +1383,7 @@ function backToTrips(): void {
                   checked: selectedInviteIds.includes(friend.friend.id),
                 }"
               >
-                {{ selectedInviteIds.includes(friend.friend.id) ? "?" : "" }}
+                {{ selectedInviteIds.includes(friend.friend.id) ? "✓" : "" }}
               </span>
             </div>
           </div>

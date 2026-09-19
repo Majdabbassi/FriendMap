@@ -18,11 +18,11 @@ watch(
   },
 )
 
-function logout() {
-  auth.logout()
+async function logout() {
+  await auth.logout()
   chat.disconnect()
   chat.reset()
-  router.push('/auth')
+  await router.push('/auth')
 }
 
 function openMessages() {
