@@ -5,12 +5,10 @@ services:
     rootDir: apps/api
     plan: free
     buildCommand: npm ci --legacy-peer-deps && DATABASE_URL="postgresql://user:pass@localhost:5432/db" npx prisma generate && npm run build
-    startCommand: npx prisma migrate deploy && npm run start:prod
+    startCommand: NODE_ENV=production npx prisma migrate deploy && NODE_ENV=production npm run start:prod
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: PORT
         value: "10000"
       - key: SEED_DEMO

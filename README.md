@@ -124,7 +124,7 @@ The app deploys to a fully free, no-credit-card stack:
 3. **API (Render)** — open <https://render.com>, **New → Blueprint**, and select this repo. The included `render.yaml` creates the `friendmap-api` free web service automatically. In its **Environment** tab set:
    - `DATABASE_URL` → the Neon connection string
    - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` → the Upstash values
-   - `JWT_SECRET` is auto-generated; `SEED_DEMO=true`, `CORS_ORIGINS=https://majdabbassi.github.io`, `NODE_ENV=production`, and `REDIS_TLS=true` are pre-filled.
+   - `JWT_SECRET` is auto-generated; `SEED_DEMO=true`, `CORS_ORIGINS=https://majdabbassi.github.io`, and `REDIS_TLS=true` are pre-filled. `NODE_ENV=production` is set inside the start command so the build runs without it (a `NODE_ENV=production` build environment makes `npm ci` skip dev dependencies, and the Prisma CLI isn't installed).
    - Verify the service builds and the health check `/health` returns `ok`.
 4. **SPA (GitHub Pages)** — in repo **Settings → Pages → Source**, choose **GitHub Actions**. The included workflow (`friendmap-pages.yml`) builds at `/FriendMap/` with a SPA fallback and deploys on every push to `main`.
    - If your Render service URL isn't `https://friendmap-api.onrender.com`, set a repository **variable** `FRIENDMAP_API_URL` with the real URL and update `CORS_ORIGINS` in Render to `https://<owner>.github.io`.
