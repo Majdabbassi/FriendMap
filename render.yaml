@@ -4,7 +4,7 @@ services:
     runtime: node
     rootDir: apps/api
     plan: free
-    buildCommand: npm ci --legacy-peer-deps && npx prisma generate && npm run build
+    buildCommand: npm ci --legacy-peer-deps && DATABASE_URL="postgresql://user:pass@localhost:5432/db" npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start:prod
     healthCheckPath: /health
     autoDeploy: true
