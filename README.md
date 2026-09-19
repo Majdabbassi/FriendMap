@@ -106,6 +106,37 @@ VITE_API_URL=http://localhost:3000
 
 Log in as two accounts (e.g. alice + bob in separate browsers), then have alice create a trip and invite bob to exercise the full meetup flow: invitation accept, meet-in-the-middle spot, live trip map, and arrival tracking.
 
+## Free Deployment (100% Free)
+
+The app deploys to a fully free, no-credit-card stack:
+
+| Piece | Host | Free tier |
+|---|---|---|
+| SPA (Vue) | GitHub Pages | Unlimited, always on |
+| API + WebSockets (NestJS) | Render free web service | 750 h/month, sleeps after 15 min idle (~50s cold start) |
+| PostgreSQL | Neon | 512 MB, always on |
+| Redis | Upstash | 256 MB, always on |
+
+> Demo users are seeded in production too (`SEED_DEMO=true`), so visitors can log in as `alice`/`bob`/`carol`/`dave`/`erin` @ `friendmap.dev` with `password123`.
+
+1. **PostgreSQL (Neon)** — create a project at <https://neon.tech>, copy the **connection string** (use the direct, non-pooled URL).
+2. **Redis (Upstash)** — create a database at <https://upstash.com>; note the **host**, **port**, and **password** (TLS is enabled via `REDIS_TLS=true`).
+3. **API (Render)** — open <https://render.com>, **New → Blueprint**, and select this repo. The included `render.yaml` creates the `friendmap-api` free web service automatically. In its **Environment** tab set:
+   - `DATABASE_URL` → the Neon connection string
+   - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` → the Upstash values
+   - `JWT_SECRET` is auto-generated; `SEED_DEMO=true`, `CORS_ORIGINS=https://majdabbassi.github.io`, `NODE_ENV=production`, and `REDIS_TLS=true` are pre-filled.
+   - Verify the service builds and the health check `/health` returns `ok`.
+4. **SPA (GitHub Pages)** — in repo **Settings → Pages → Source**, choose **GitHub Actions**. The included workflow (`friendmap-pages.yml`) builds at `/FriendMap/` with a SPA fallback and deploys on every push to `main`.
+   - If your Render service URL isn't `https://friendmap-api.onrender.com`, set a repository **variable** `FRIENDMAP_API_URL` with the real URL and update `CORS_ORIGINS` in Render to `https://<owner>.github.io`.
+
+Result:
+
+- App: `https://<owner>.github.io/FriendMap/`
+- API + Socket.IO: `https://friendmap-api.onrender.com`
+- Swagger: `https://friendmap-api.onrender.com/docs`
+
+**Free-tier caveats:** the Render instance spins down after ~15 minutes of inactivity (first visitor after idle waits ~50s for a cold start), there's a single API instance, and chat image uploads live on the instance's ephemeral disk (they reset on redeploy). Everything else is persistent via Neon/Upstash.
+
 ## Architecture
 
 ```

@@ -21,16 +21,20 @@ export class RedisService implements OnModuleDestroy {
   private readonly redisClient: RedisClientType;
 
   constructor() {
+    const useTls = process.env.REDIS_TLS === 'true';
+
     this.client = new Redis({
       host: process.env.REDIS_HOST ?? 'localhost',
       port: Number(process.env.REDIS_PORT ?? 6379),
       password: process.env.REDIS_PASSWORD,
+      ...(useTls ? { tls: {} } : {}),
     });
 
     this.redisClient = createClient({
       socket: {
         host: process.env.REDIS_HOST ?? 'localhost',
         port: Number(process.env.REDIS_PORT ?? 6379),
+        ...(useTls ? { tls: true } : {}),
       },
       password: process.env.REDIS_PASSWORD,
     });

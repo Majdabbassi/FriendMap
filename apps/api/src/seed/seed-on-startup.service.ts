@@ -7,8 +7,9 @@ const demoPassword = 'password123';
 const demoUsers = ['alice', 'bob', 'carol', 'dave', 'erin'] as const;
 const demoEmails = demoUsers.map((username) => `${username}@friendmap.dev`);
 
-// Environment check to prevent seeding in production
-const isProduction = process.env.NODE_ENV === 'production';
+// Environment check to prevent seeding in production unless explicitly enabled
+const shouldSeed =
+  process.env.NODE_ENV !== 'production' || process.env.SEED_DEMO === 'true';
 
 const acceptedEdges: ReadonlyArray<readonly [string, string]> = [
   ['alice', 'bob'],
@@ -74,7 +75,7 @@ export class SeedOnStartupService implements OnApplicationBootstrap {
   constructor(private readonly prisma: PrismaService) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    if (isProduction) {
+    if (!shouldSeed) {
       this.logger.warn('Skipping demo data seeding in production environment');
       return;
     }

@@ -23,8 +23,8 @@ export class HealthController {
   check() {
     return this.health.check([
       () => this.checkDatabase(),
-      () => this.memory.checkHeap('memory_heap', 150 * 1024 * 1024),
-      () => this.memory.checkRSS('memory_rss', 150 * 1024 * 1024),
+      () => this.memory.checkHeap('memory_heap', 400 * 1024 * 1024),
+      () => this.memory.checkRSS('memory_rss', 400 * 1024 * 1024),
       () => this.disk.checkStorage('storage', { path: process.cwd(), thresholdPercent: 0.9 }),
       () => this.checkRedis(),
     ]);

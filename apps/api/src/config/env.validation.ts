@@ -41,6 +41,14 @@ class EnvironmentVariables {
   @IsOptional()
   REDIS_PORT?: number;
 
+  @IsString()
+  @IsOptional()
+  REDIS_TLS?: string;
+
+  @IsString()
+  @IsOptional()
+  SEED_DEMO?: string;
+
   @IsInt()
   @Min(1)
   @IsOptional()
