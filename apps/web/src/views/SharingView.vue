@@ -10,8 +10,8 @@ const error = ref('')
 
 async function loadList() {
   if (mode.value !== 'SELECTED' && mode.value !== 'EXCEPT_SELECTED') return
-  const list = await apiRequest<{ friend: User }[]>(`/sharing/list?type=${mode.value === 'SELECTED' ? 'SELECTED' : 'EXCEPT'}`)
-  selected.value = new Set(list.map((entry) => entry.friend.id))
+  const list = await apiRequest<{ friendId: string }[]>(`/sharing/list?type=${mode.value === 'SELECTED' ? 'SELECTED' : 'EXCEPT'}`)
+  selected.value = new Set(list.map((entry) => entry.friendId))
 }
 async function load() { const settings = await apiRequest<{ mode: SharingMode }>('/sharing/settings'); mode.value = settings.mode; friends.value = await apiRequest<Friendship[]>('/friendships'); await loadList() }
 async function changeMode() { await apiRequest('/sharing/settings', { method: 'PATCH', body: JSON.stringify({ mode: mode.value }) }); await loadList() }
