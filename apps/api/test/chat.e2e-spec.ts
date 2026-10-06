@@ -113,7 +113,7 @@ describe('Chat + presence (e2e)', () => {
     }
   });
 
-  it('uploads an image attachment, delivers it as a link, and serves it', async () => {
+  it('uploads an image attachment, delivers it as a link, and serves it only to the two people in the chat', async () => {
     const alice = await connectAs(aliceToken);
     const bob = await connectAs(bobToken);
 
@@ -132,7 +132,12 @@ describe('Chat + presence (e2e)', () => {
       const url = (upload.body as { url: string }).url;
       expect(url).toMatch(/^\/uploads\/.+\.png$/);
 
-      await request(app.getHttpServer()).get(url).expect(200);
+      // never without a login, and not even to the uploader until it is part of a conversation
+      await request(app.getHttpServer()).get(url).expect(401);
+      await request(app.getHttpServer())
+        .get(url)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .expect(404);
 
       const received = await new Promise<{
         senderId: string;
@@ -167,6 +172,33 @@ describe('Chat + presence (e2e)', () => {
           expect.objectContaining({ imageUrl: url, body: 'a photo' }),
         ]),
       );
+
+      // the sender and the recipient can open it; a third person cannot, even a friend of both
+      for (const token of [aliceToken, bobToken]) {
+        const image = await request(app.getHttpServer())
+          .get(url)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200);
+        expect(image.headers['cache-control']).toContain('private');
+      }
+      const carolToken = await login('carol');
+      await request(app.getHttpServer())
+        .get(url)
+        .set('Authorization', `Bearer ${carolToken}`)
+        .expect(404);
+
+      // deleting the message takes the photo with it
+      const sent = (history.body as { id: string; imageUrl: string }[]).find(
+        (m) => m.imageUrl === url,
+      );
+      await request(app.getHttpServer())
+        .delete(`/messages/${sent!.id}`)
+        .set('Authorization', `Bearer ${aliceToken}`)
+        .expect((res) => expect([200, 204]).toContain(res.status));
+      await request(app.getHttpServer())
+        .get(url)
+        .set('Authorization', `Bearer ${bobToken}`)
+        .expect(404);
     } finally {
       alice.disconnect();
       bob.disconnect();

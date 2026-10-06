@@ -22,9 +22,11 @@ COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN sed -i 's/\r$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
 
-# Create non-root user
+# Create non-root user. The uploads directory must exist (and belong to it) before a volume is mounted there:
+# otherwise Docker creates the mount point as root and every chat image upload fails with EACCES.
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 && \
+    mkdir -p /app/uploads && \
     chown -R nodejs:nodejs /app
 USER nodejs
 

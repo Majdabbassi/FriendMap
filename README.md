@@ -53,7 +53,7 @@ docker compose up --build
 - API docs (Swagger): <http://localhost:3000/docs>
 - Health check: <http://localhost:3000/health>
 
-> Containers run as non-root users. Seeded demo users (below) are created automatically on API startup in non-production environments.
+> Containers run as non-root users and every port is bound to `127.0.0.1`. The demo users (below) are seeded on startup (`SEED_DEMO`, on by default in Docker Compose).
 
 ### Kubernetes (Production)
 
@@ -219,11 +219,11 @@ The architecture is designed to scale horizontally rather than optimized against
 - **Environment Validation**: Required secrets are validated at boot; insecure defaults rejected
 - **Non-root Containers**: All containers run as non-root users
 - **Authorization Enforcement**: Friendship-checked on every HTTP, WebSocket, and history read
-- **Image Attachment Validation**: Images are sniffed by magic bytes against an allowlist (PNG/JPEG/GIF/WebP, max 3 MB), so HTML or scripts can't be disguised as attachments. Files are stored on a Docker/Kubernetes volume under random UUID filenames and served from `/uploads/**` with immutable cache headers; the database keeps only the URL, never base64.
+- **Image Attachment Validation**: Images are sniffed by magic bytes against an allowlist (PNG/JPEG/GIF/WebP, max 3 MB), so HTML or scripts can't be disguised as attachments. Files are stored on a Docker/Kubernetes volume under random UUID filenames; the database keeps only the URL, never base64. `/uploads/**` requires a login and only serves an image to the sender and the recipient of a message that carries it (anyone else gets a 404, a deleted message takes its photo with it, and responses are `Cache-Control: private`); the web app fetches images with the token and shows them through object URLs.
 
 ## Testing
 
-Both workspaces ship with unit tests (Jest for API, Vitest for web) plus a real end-to-end suite against Postgres + Redis.
+Both workspaces ship with unit tests (Jest for API, Vitest for web) plus a real end-to-end suite against Postgres + Redis: 109 API unit tests, 21 end-to-end tests and 36 web tests. GitHub Actions runs all of them (the e2e suite against Postgres and a password-protected Redis) on every push.
 
 ```bash
 # API unit tests + lint
@@ -244,7 +244,7 @@ npm run build
 - Full auth flow: register → login → refresh-token rotation → logout revocation
 - Friendship access control (authenticated lists, empty pending inbox)
 - Socket.IO: rejected connections, location broadcast between friends, stop/resume viewing
-- Chat + presence: message delivery between friends with persistence, image-attachment delivery, messaging non-friends rejected, online/offline broadcast
+- Chat + presence: message delivery between friends with persistence, image-attachment delivery (the image is only served to the two people in the conversation, never anonymously, and disappears with a deleted message), messaging non-friends rejected, online/offline broadcast
 - Trips: full lifecycle (create → invite → accept → chat → meetup → arrive), membership enforcement, fixed meetup + proposal + apply-on-accept, trip chat over sockets, arrival endpoint, and `trip:join` room access
 
 **Unit coverage**

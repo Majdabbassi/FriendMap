@@ -1,0 +1,47 @@
+name: API tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: friendmap
+          POSTGRES_PASSWORD: friendmap-ci
+          POSTGRES_DB: friendmap_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U friendmap -d friendmap_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://friendmap:friendmap-ci@localhost:5432/friendmap_test
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redis-ci-password
+      JWT_SECRET: ci-only-jwt-secret-that-is-at-least-32-chars
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      # Redis with a password, like production (a service container cannot be given a command)
+      - name: Start Redis
+        run: docker run -d -p 6379:6379 redis:7-alpine redis-server --requirepass "$REDIS_PASSWORD"
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - name: Unit tests
+        run: npm test
+      - name: End-to-end tests (HTTP + Socket.IO against Postgres and Redis)
+        run: npm run test:e2e

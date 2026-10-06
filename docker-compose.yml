@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # loopback only: reachable for local dev, not from the network
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
     command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -49,10 +49,12 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       PORT: ${PORT:-3000}
       NODE_ENV: production
+      # demo users (alice, bob, carol, dave, erin) so a fresh "docker compose up" can be tried at once
+      SEED_DEMO: ${SEED_DEMO:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       UPLOADS_DIR: /app/uploads
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - api_uploads:/app/uploads
     restart: unless-stopped
@@ -68,7 +70,7 @@ services:
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     restart: unless-stopped
 
 volumes:

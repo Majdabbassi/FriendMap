@@ -37,6 +37,40 @@ export function setTokens(tokens: AuthTokens): void {
 export function clearTokens(): void {
   localStorage.removeItem(ACCESS_TOKEN_KEY)
   localStorage.removeItem(REFRESH_TOKEN_KEY)
+  clearProtectedImages()
+}
+
+// Chat images are only served to the two people in the conversation, so they need the login token, which an
+// <img src> cannot send. They are fetched with the token and shown through a local object URL instead.
+const protectedImages = new Map<string, Promise<string>>()
+
+async function fetchWithToken(url: string): Promise<Response> {
+  const token = getAccessToken()
+  return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+}
+
+export function protectedImageUrl(path: string): Promise<string> {
+  let pending = protectedImages.get(path)
+  if (!pending) {
+    pending = (async () => {
+      let response = await fetchWithToken(`${apiBaseUrl}${path}`)
+      if (response.status === 401 && getRefreshToken() && (await refreshAccessToken())) {
+        response = await fetchWithToken(`${apiBaseUrl}${path}`)
+      }
+      if (!response.ok) throw new Error(`Image unavailable (${response.status})`)
+      return URL.createObjectURL(await response.blob())
+    })()
+    pending.catch(() => protectedImages.delete(path)) // a failed image can be retried later
+    protectedImages.set(path, pending)
+  }
+  return pending
+}
+
+export function clearProtectedImages(): void {
+  for (const pending of protectedImages.values()) {
+    pending.then((url) => URL.revokeObjectURL(url)).catch(() => undefined)
+  }
+  protectedImages.clear()
 }
 
 let refreshPromise: Promise<boolean> | null = null

@@ -6,6 +6,7 @@ import {
   apiRequest,
   apiUpload,
   getAccessToken,
+  protectedImageUrl,
   clearConversation,
   deleteMessage,
   searchMessages,
@@ -105,8 +106,19 @@ function conversationPreview(message: ChatMessage | null): string {
   return `${message.senderId === auth.userId ? 'You: ' : ''}${base}`
 }
 
-function imageSrc(message: ChatMessage): string {
-  return `${apiBaseUrl}${message.imageUrl}`
+const imageUrls = ref<Record<string, string>>({})
+
+/** Local URL of a chat image, fetched with the login token the first time it is shown. */
+function imageSrc(message: ChatMessage): string | undefined {
+  const path = message.imageUrl
+  if (!path) return undefined
+  if (!(path in imageUrls.value)) {
+    imageUrls.value = { ...imageUrls.value, [path]: '' }
+    protectedImageUrl(path)
+      .then((url) => (imageUrls.value = { ...imageUrls.value, [path]: url }))
+      .catch(() => undefined)
+  }
+  return imageUrls.value[path] || undefined
 }
 
 function showSocketError(message: string): void {
