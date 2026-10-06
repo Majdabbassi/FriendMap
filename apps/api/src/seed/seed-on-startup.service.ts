@@ -1,5 +1,10 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { FriendshipStatus, SharingListType, SharingMode } from '@prisma/client';
+import {
+  FriendshipStatus,
+  SharingListType,
+  SharingMode,
+  TripMemberRole,
+} from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -85,6 +90,18 @@ export class SeedOnStartupService implements OnApplicationBootstrap {
   private async resetAndSeed(): Promise<void> {
     const passwordHash = await bcrypt.hash(demoPassword, 10);
 
+    // The public demo lets anyone sign in as these users, so every start wipes what visitors wrote or planned.
+    await this.prisma.message.deleteMany({
+      where: {
+        OR: [
+          { sender: { email: { in: demoEmails } } },
+          { recipient: { email: { in: demoEmails } } },
+        ],
+      },
+    });
+    await this.prisma.trip.deleteMany({
+      where: { creator: { email: { in: demoEmails } } },
+    });
     await this.prisma.locationHistoryPoint.deleteMany({
       where: { user: { email: { in: demoEmails } } },
     });
@@ -163,6 +180,7 @@ export class SeedOnStartupService implements OnApplicationBootstrap {
       ...listData,
       ...historyData,
     ]);
+    await this.seedConversationAndTrip(ids, now);
 
     this.logger.log('Demo data seeded.');
     console.table(
@@ -173,6 +191,50 @@ export class SeedOnStartupService implements OnApplicationBootstrap {
         sharingMode: sharingModes[username] ?? 'GHOST (default)',
       })),
     );
+  }
+
+  /** A short chat and a planned meetup, so Messages and Trips are not empty on a first visit. */
+  private async seedConversationAndTrip(
+    ids: Record<string, string>,
+    now: number,
+  ): Promise<void> {
+    const lines: ReadonlyArray<readonly [string, string, string, number]> = [
+      ['bob', 'alice', 'Are you around the marina this afternoon?', 50],
+      ['alice', 'bob', 'Yes, I can see you on the map, ten minutes away.', 45],
+      ['bob', 'alice', 'Great, I will start a trip so carol can join.', 40],
+      ['carol', 'alice', 'I am in ghost mode today, ping me when you are there.', 30],
+    ];
+    for (const [from, to, body, minutesAgo] of lines) {
+      await this.prisma.message.create({
+        data: {
+          senderId: ids[from],
+          recipientId: ids[to],
+          body,
+          createdAt: new Date(now - minutesAgo * 60_000),
+          readAt: new Date(now - (minutesAgo - 2) * 60_000),
+        },
+      });
+    }
+
+    await this.prisma.trip.create({
+      data: {
+        name: 'Coffee by the marina',
+        createdById: ids.bob,
+        meetingTime: new Date(now + 2 * 60 * 60_000),
+        members: {
+          create: [
+            { userId: ids.bob, role: TripMemberRole.ADMIN },
+            { userId: ids.alice, role: TripMemberRole.MEMBER },
+          ],
+        },
+        invites: { create: [{ fromId: ids.bob, toId: ids.carol }] },
+        messages: {
+          create: [
+            { senderId: ids.bob, body: 'Meeting in the middle, see you there!' },
+          ],
+        },
+      },
+    });
   }
 
   private async upsertUsers(
