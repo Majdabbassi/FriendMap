@@ -1,79 +1,46 @@
 # FriendMap
 
-Real-time location sharing between friends, where **you decide who sees you** — Ghost, Everyone, Selected or Everyone-except — and a change takes effect for people who are already watching, not only on their next visit. Around the map: friend requests, direct messages with private photo attachments, online presence, and meetup planning (trips): invite friends, pick a meet-in-the-middle or fixed spot, and see who has arrived, live.
+Real-time location sharing between friends, with privacy controls (Ghost / Everyone / Selected / Except-selected), fast revocation when a user changes who can see them — plus direct messaging, online presence, and meetup planning (trips): invite friends, pick a meet-in-the-middle or fixed spot, and track who's arrived — live.
 
-**NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO · Vue 3 · Pinia · Leaflet · Docker Compose · Kubernetes**
+Stack: NestJS (TypeScript, strict) · Prisma · PostgreSQL · Redis · Socket.IO · Vue 3 · Pinia · Leaflet · Docker Compose · Kubernetes.
 
-## Live demo
-
-**https://majdabbassi.github.io/FriendMap/** (Vue app on GitHub Pages, API on Render, PostgreSQL on Neon, Redis on Upstash — all free tiers)
-
-Sign in as `alice@friendmap.dev` and, in another browser, `bob@friendmap.dev` (password `password123` for both). The free API sleeps after ~15 minutes idle, so the first request can take up to a few minutes. Demo data is wiped and re-seeded on every start. A [Loom walkthrough](https://www.loom.com/share/9f81f4a086174129a44bb644c7677327) shows the app in action.
-
-| Live map with friends' locations | Sharing controls | Friends list |
-|---|---|---|
-| ![Live map](docs/screenshots/map.png) | ![Sharing controls](docs/screenshots/sharing.png) | ![Friends list](docs/screenshots/friends.png) |
-
-## Architecture
-
-```mermaid
-flowchart LR
-    V[Vue 3 + Pinia + Leaflet] -->|REST + JWT| A
-    V <-->|Socket.IO| A
-    subgraph API["NestJS API (1..n instances)"]
-      A[Auth · Friendships · Sharing · Location<br/>Messages · Trips · Health]
-    end
-    A -->|Prisma| P[(PostgreSQL<br/>users, friendships, settings,<br/>messages, trips, sampled history)]
-    A <-->|adapter pub/sub,<br/>current positions, presence,<br/>socket rate limits| R[(Redis)]
-```
-
-**Durable data in PostgreSQL, live data in Redis.** Users, friendships, sharing settings, messages, trips and a sampled location history are stored through Prisma (schema changes are migrations, applied with `prisma migrate deploy` at start). Everything that changes every few seconds lives in Redis: each user's current position, online presence (a key with a 90-second TTL), and the counters that rate-limit socket events. The Socket.IO **Redis adapter** relays room broadcasts between API instances, so a viewer connected to one instance receives positions sent to another.
-
-**Rooms.** Each user has `user:{id}` (chat, presence) and `location:{id}` (the people allowed to see them on the map); each trip has `trip:{id}`.
-
-**How a location update flows.** A client sends a point over the socket. The API rate-limits it (12 per minute per user, in Redis), validates it against the previous point — rejecting points from the future (> 30 s), stale points (> 5 min), out-of-order points and implausible speeds (> 500 km/h) — stores it as the current position, samples it into history (only if ≥ 30 s or ≥ 25 m from the last stored point; history is purged after 24 h), and emits it to the sockets in `location:{id}`.
-
-**How privacy is enforced.** Visibility is checked **when a viewer joins** someone's `location:{id}` room (on connect, for each friend, using one batched query), and **re-checked whenever it could change**: the sharing service emits `sharing.mode-changed` / `sharing.list-changed`, and unfriending emits `friendship.removed`. The location gateway then fetches the sockets in that room across all instances, removes every viewer who is no longer allowed and sends them `location:hidden`; viewers who just became allowed are added and receive the current position. HTTP reads (current locations, history) apply the same `VisibilityService` rules.
-
-**Trips** are an explicit exception: accepting a trip invite means sharing with that group, so `trip:join` adds each member to every other member's `location:{id}` room for the trip map, even if their general sharing is off. A trip moves through `DRAFT → DECIDED → ARCHIVED`; the meetup point is either AUTO (the geographic center of the members) or FIXED, with proposals that members accept; members tap "I'm here" and arrivals are broadcast to the trip room.
-
-**Chat photos** are uploaded through the API, sniffed by magic bytes (PNG, JPEG, GIF, WebP, max 3 MB), stored under random UUID names on a volume, and served only to a logged-in sender or recipient of a message that carries them (`Cache-Control: private`). The web app fetches them with the token and shows them through object URLs.
-
-## Key decisions and trade-offs
-
-1. **Authorize at room join, revoke on change events** — instead of checking visibility for every GPS point.
-   *Why:* a moving user sends a point every few seconds to many viewers; a database check per point and per viewer would not scale. Membership of `location:{id}` *is* the permission, so a broadcast is a plain room emit. *Cost:* correctness depends on every path that can change visibility emitting an event (mode, list, unfriend); the mode-change and unfriend paths have unit tests (the list-change path reuses the same handler), and the e2e suite checks stop/resume viewing.
-2. **Redis for live state, PostgreSQL for history.**
-   *Why:* current positions and presence are overwritten constantly and only matter now, which suits an in-memory store with TTLs; history and relations need durability and queries. *Cost:* Redis is a hard dependency — without it there is no realtime.
-3. **The Socket.IO Redis adapter from day one.**
-   *Why:* WebSocket connections are sticky to one process; with the adapter, any number of API pods behave like one (the Kubernetes manifests run 3). *Cost:* every broadcast goes through Redis pub/sub, even with a single instance.
-4. **Store a sampled history for 24 hours only.**
-   *Why:* enough to draw your own recent trail; keeping every point forever would be a privacy liability and a write-heavy table. *Cost:* no long-term history or analytics.
-5. **Short-lived access tokens with rotating refresh tokens.**
-   *Why:* a 15-minute access token limits the damage of a leak; refresh tokens (7 days) are stored, rotated on use and revoked on logout. *Cost:* the client must refresh transparently (the web API client does).
-6. **Repository layer with batch queries.**
-   *Why:* friend lists drive almost every screen; batching visibility and friendship lookups (`canViewMany`) avoids N+1 queries as lists grow.
-
-## Security model
-
-- **Authentication:** JWT access tokens (15 min) and rotated refresh tokens (7 days), revoked on logout. Sockets authenticate with the access token.
-- **Authorization:** friendship and sharing rules are checked on HTTP routes, socket joins and history reads; messages only between friends; trip actions only for members (archive and delete for the trip admin).
-- **Rate limits:** auth routes per IP (login 3/min, register 5/min, refresh and logout 10/min) and 20 requests/min per route by default, kept in memory per instance (NestJS throttler); socket events (location, messages, reads, trips) limited through Redis, so the limit is shared by all instances.
-- **Attachments:** content-sniffed, size-capped, random names, private to the two people in the conversation; a deleted message takes its photo with it.
-- **Platform:** Helmet headers, environment validated at boot (insecure defaults such as a short `JWT_SECRET` are rejected), non-root containers, every Docker port bound to `127.0.0.1`.
-
-**Review findings (fixed):** chat photos used to be public at `/uploads/...` to anyone with the URL — they now require a login and a message in common, with an e2e test covering the sender, the recipient, a third friend and a deleted message. In Docker, uploads failed with `EACCES` for the non-root user and the demo users were not seeded; both fixed.
+**Live demo:** https://majdabbassi.github.io/FriendMap/ — sign in as `alice@friendmap.dev` and, in another browser, `bob@friendmap.dev` (password `password123`). The free API sleeps when idle, so the first request can take up to a few minutes. Demo data is wiped and re-seeded on every start. See the [Loom walkthrough](https://www.loom.com/share/9f81f4a086174129a44bb644c7677327) too.
 
 ## Features
 
-- **Live map** with friends' positions, a "stop viewing" toggle per friend, and your own 24-hour history.
-- **Four sharing modes** (Ghost, Everyone, Selected, Except-selected) with friend lists.
-- **Friendships:** send, accept, reject, remove.
-- **Direct messages** with read receipts, image attachments, unread badges and toasts; **online presence**.
-- **Trips:** invite accepted friends, propose a time, meet-in-the-middle or fixed spot with proposals, live trip map, trip chat with typing indicator, arrival tracking, archive or leave.
-- **API docs:** Swagger/OpenAPI at `/docs`, generated from the DTOs. **Health:** `/health` checks PostgreSQL, Redis, memory and disk.
+### Core Functionality
+- **Real-time Location Sharing**: Share your live location with friends via WebSocket
+- **Privacy Controls**: Four sharing modes (Ghost, Everyone, Selected, Except-selected)
+- **Fast Revocation**: Visibility changes take effect immediately, even for friends already watching the map (event-driven, across every API instance)
+- **Friendship Management**: Send, accept, reject, and remove friend requests
+- **Direct Messaging**: Real-time chat with friends, including read receipts and secure image attachments
+- **Online Presence**: See who's online, updated live via Redis-backed presence
+- **Meetup Planning (Trips)**: Plan meetups with friends — create a trip, invite accepted friends, propose a time, and archive or leave it when you're done
+- **Meet-In-The-Middle Spots**: On a trip, the default AUTO meetup is computed as the geographic center of all members; any member can pin a fixed location instead
+- **Live Trip Map**: Activating a trip on the main map streams every member's location into a trip layer — even friends who've otherwise disabled general sharing — with a meetup pin, proposal marker, and per-member "arrived" status updated in real time
+- **Arrival Tracking**: Members tap "I'm here" and arrivals stream to the whole group live
+- **Location History**: View your own 24-hour location history
+- **Location Validation**: Rejects stale, out-of-order, and implausible-speed points
 
-## Quick start (Docker Compose)
+### Production-Ready Features
+- **Horizontal Scaling**: Kubernetes deployment with Socket.IO Redis adapter
+- **Refresh Token Flow**: Secure JWT authentication with token rotation
+- **Enhanced Security**: Helmet headers, HTTP + socket rate limiting, non-root containers, environment validation at boot
+- **Repository Pattern**: Clean data access layer with optimized batch queries (no N+1)
+- **Health Monitoring**: Comprehensive health checks for all services
+- **API Documentation**: Swagger/OpenAPI at `/docs`, generated from DTOs
+
+## Screenshots
+
+| Description | Screenshot |
+|---|---|
+| Live map with friends' locations | ![Live map](docs/screenshots/map.png) |
+| Sharing controls | ![Sharing controls](docs/screenshots/sharing.png) |
+| Friends list | ![Friends list](docs/screenshots/friends.png) |
+
+## Quick Start
+
+### Docker Compose (Development)
 
 ```bash
 git clone https://github.com/Majdabbassi/FriendMap.git
@@ -84,72 +51,13 @@ docker compose up --build
 ```
 
 - Web app: <http://localhost:8080>
-- API: <http://localhost:3000> · Swagger: <http://localhost:3000/docs> · Health: <http://localhost:3000/health>
+- API: <http://localhost:3000>
+- API docs (Swagger): <http://localhost:3000/docs>
+- Health check: <http://localhost:3000/health>
 
-Five demo users are seeded on start-up (`SEED_DEMO`, on by default in Compose): `alice`, `bob`, `carol`, `dave`, `erin` `@friendmap.dev`, password `password123`. Friendships: alice↔bob, alice↔carol, bob↔carol, bob↔dave, carol↔erin. Log in as alice and bob in two browsers, have alice create a trip and invite bob, and walk through the whole meetup flow.
+> Containers run as non-root users and every port is bound to `127.0.0.1`. The demo users (below) are seeded on startup (`SEED_DEMO`, on by default in Docker Compose).
 
-## Environment variables
-
-```bash
-# Database
-POSTGRES_USER=friendmap
-POSTGRES_PASSWORD=your-strong-password
-POSTGRES_DB=friendmap
-
-# JWT (generate with: openssl rand -base64 32)
-JWT_SECRET=your-jwt-secret-min-32-characters
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=your-redis-password
-# REDIS_TLS=true for managed Redis such as Upstash
-
-# Application
-PORT=3000
-NODE_ENV=development
-VITE_API_URL=http://localhost:3000
-# CORS_ORIGINS=http://localhost:5173   SEED_DEMO=true
-```
-
-`JWT_SECRET`, `DATABASE_URL`, `REDIS_PASSWORD` and `NODE_ENV` are validated at boot.
-
-## Tests
-
-```bash
-cd apps/api
-npm test              # 109 unit tests (Jest)
-npm run test:e2e      # 21 end-to-end tests, needs PostgreSQL + Redis (see docker-compose.yml)
-npm run lint
-
-cd ../web
-npm run test:unit     # 36 tests (Vitest)
-npm run build
-```
-
-- **Unit (API):** auth and refresh-token rotation, the visibility rules for all four modes, friendship transitions, location validation, the location and message gateways (connection, rate limiting, privacy, read receipts), presence, trips (invites, admin-only actions, meetup and proposal rules), attachments.
-- **End-to-end (real PostgreSQL + Redis):** register → login → refresh rotation → logout revocation; friendship access; rejected socket connections, a location broadcast between friends, stop/resume viewing; chat delivery and persistence, private image attachments, messaging a non-friend refused, presence; the full trip lifecycle (create → invite → accept → chat → meetup → arrive), membership enforcement and `trip:join` access.
-- **Web:** the API client's token handling and the auth, presence and chat stores.
-
-GitHub Actions runs all three suites on every push (the e2e suite against PostgreSQL and a password-protected Redis) and builds the web app.
-
-## Free deployment
-
-| Piece | Host | Free tier |
-|---|---|---|
-| SPA (Vue) | GitHub Pages | always on |
-| API + WebSockets (NestJS) | Render free web service | sleeps after 15 min idle |
-| PostgreSQL | Neon | 512 MB, always on |
-| Redis | Upstash | 256 MB, always on |
-
-1. **PostgreSQL (Neon)** — create a project and copy the direct (non-pooled) connection string.
-2. **Redis (Upstash)** — create a database; note host, port and password (TLS via `REDIS_TLS=true`).
-3. **API (Render)** — **New → Blueprint**, select this repo; `render.yaml` creates `friendmap-api`. Set `DATABASE_URL`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. `JWT_SECRET` is generated; `SEED_DEMO=true`, `CORS_ORIGINS=https://majdabbassi.github.io` and `REDIS_TLS=true` are pre-filled. `NODE_ENV=production` is set in the start command (not the build), because a production build environment makes `npm ci` skip the Prisma CLI.
-4. **SPA (GitHub Pages)** — Settings → Pages → Source: GitHub Actions. `friendmap-pages.yml` builds under `/FriendMap/` with a SPA fallback. If your API URL differs, set the repository variable `FRIENDMAP_API_URL` and update `CORS_ORIGINS`.
-
-**Free-tier caveats:** one API instance; chat photos live on the instance's ephemeral disk and reset on redeploy; everything else persists in Neon and Upstash.
-
-## Kubernetes
+### Kubernetes (Production)
 
 ```bash
 cd k8s
@@ -164,23 +72,234 @@ kubectl apply -f web-deployment.yaml -f web-service.yaml
 kubectl apply -f ingress.yaml
 ```
 
-Layout: API (3 replicas), web (2), PostgreSQL (1), Redis (1). Roll back with `kubectl rollout undo deployment/<name>`.
+Service layout: API (3 replicas), Web (2 replicas), PostgreSQL (1), Redis (1). Roll back with `kubectl rollout undo deployment/<name>`. Find issues via `kubectl get pods` and `kubectl logs -f deployment/api`.
 
-## Scaling notes
+## Environment Variables
 
-- **API pods are stateless:** current positions and presence are in Redis, and the adapter fans out broadcasts, so any pod can serve any connection. Add replicas as connections grow; move Redis to cluster mode when pub/sub volume demands it.
-- **Database:** composite indexes on the hot queries and batched visibility checks keep reads flat as friend lists grow; add PgBouncer or read replicas under contention; partition the history table (or move it to a time-series store) at very large write volumes.
-- **HTTP rate limits** are per instance today; with several pods they should move to a Redis-backed throttler storage like the socket limits.
+```bash
+# Database
+POSTGRES_USER=friendmap
+POSTGRES_PASSWORD=your-strong-password
+POSTGRES_DB=friendmap
 
-## Data model
+# JWT (generate with: openssl rand -base64 32)
+JWT_SECRET=your-jwt-secret-min-32-characters
 
-- **User**: email, username, password hash · **RefreshToken**: token, expiry
-- **Friendship**: requester / addressee, status (PENDING / ACCEPTED)
-- **SharingSettings**: mode (GHOST / EVERYONE / SELECTED / EXCEPT_SELECTED) · **SharingListEntry**: owner, friend, list type
-- **LocationHistoryPoint**: sampled points, 24-hour retention
-- **Message**: sender, recipient, optional body, `readAt`, optional `imageUrl`, soft delete (`deletedAt`) propagated live
-- **Trip**: name, creator, status, meetup mode (AUTO / FIXED) with an optional pending proposal, meeting time · **TripMember**: role (ADMIN / MEMBER), `arrivedAt` · **TripInvite**: status, `respondedAt` · **TripMessage**: per-trip chat
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=your-redis-password
 
-## Not done yet
+# Application
+PORT=3000
+NODE_ENV=development
+VITE_API_URL=http://localhost:3000
+```
 
-Prometheus metrics and distributed tracing; Redis cluster mode; shared (Redis) storage for the HTTP rate limits.
+`JWT_SECRET`, `DATABASE_URL`, `REDIS_PASSWORD`, and `NODE_ENV` are validated at boot — insecure defaults are rejected.
+
+## Demo Users
+
+5 demo users are seeded automatically on startup (non-production):
+
+- Accounts: `alice`, `bob`, `carol`, `dave`, `erin` @ `friendmap.dev`
+- Password: `password123`
+- Friendships: alice↔bob, alice↔carol, bob↔carol, bob↔dave, carol↔erin
+
+Log in as two accounts (e.g. alice + bob in separate browsers), then have alice create a trip and invite bob to exercise the full meetup flow: invitation accept, meet-in-the-middle spot, live trip map, and arrival tracking.
+
+## Free Deployment (100% Free)
+
+The app deploys to a fully free, no-credit-card stack:
+
+| Piece | Host | Free tier |
+|---|---|---|
+| SPA (Vue) | GitHub Pages | Unlimited, always on |
+| API + WebSockets (NestJS) | Render free web service | 750 h/month, sleeps after 15 min idle (cold start up to a few minutes) |
+| PostgreSQL | Neon | 512 MB, always on |
+| Redis | Upstash | 256 MB, always on |
+
+> Demo users are seeded in production too (`SEED_DEMO=true`), so visitors can log in as `alice`/`bob`/`carol`/`dave`/`erin` @ `friendmap.dev` with `password123`.
+
+1. **PostgreSQL (Neon)** — create a project at <https://neon.tech>, copy the **connection string** (use the direct, non-pooled URL).
+2. **Redis (Upstash)** — create a database at <https://upstash.com>; note the **host**, **port**, and **password** (TLS is enabled via `REDIS_TLS=true`).
+3. **API (Render)** — open <https://render.com>, **New → Blueprint**, and select this repo. The included `render.yaml` creates the `friendmap-api` free web service automatically. In its **Environment** tab set:
+   - `DATABASE_URL` → the Neon connection string
+   - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` → the Upstash values
+   - `JWT_SECRET` is auto-generated; `SEED_DEMO=true`, `CORS_ORIGINS=https://majdabbassi.github.io`, and `REDIS_TLS=true` are pre-filled. `NODE_ENV=production` is set inside the start command so the build runs without it (a `NODE_ENV=production` build environment makes `npm ci` skip dev dependencies, and the Prisma CLI isn't installed).
+   - Verify the service builds and the health check `/health` returns `ok`.
+4. **SPA (GitHub Pages)** — in repo **Settings → Pages → Source**, choose **GitHub Actions**. The included workflow (`friendmap-pages.yml`) builds at `/FriendMap/` with a SPA fallback and deploys on every push to `main`.
+   - If your Render service URL isn't `https://friendmap-api.onrender.com`, set a repository **variable** `FRIENDMAP_API_URL` with the real URL and update `CORS_ORIGINS` in Render to `https://<owner>.github.io`.
+
+Result:
+
+- App: `https://<owner>.github.io/FriendMap/`
+- API + Socket.IO: `https://friendmap-api.onrender.com`
+- Swagger: `https://friendmap-api.onrender.com/docs`
+
+**Free-tier caveats:** the Render instance spins down after ~15 minutes of inactivity (the first visitor after idle waits for a cold start, up to a few minutes), there's a single API instance, and chat image uploads live on the instance's ephemeral disk (they reset on redeploy). Everything else is persistent via Neon/Upstash.
+
+## Architecture
+
+```
+            ┌──────────────┐
+            │   Vue 3      │
+            │ (Leaflet map)│
+            └──────┬───────┘
+                   │
+            HTTP + Socket.IO
+                   │
+            ┌──────▼────────┐
+            │   NestJS      │
+            │               │
+            │ Auth          │
+            │ Friendships   │
+            │ Sharing       │
+            │ Location      │
+            │ Messages      │
+            │ Trips         │
+            │ Health        │
+            └───┬───────┬───┘
+                │       │
+         ┌──────▼──┐ ┌──▼──────┐
+         │ Postgres│ │  Redis  │
+         │ durable │ │  hot/   │
+         │  data   │ │  live   │
+         └─────────┘ └─────────┘
+```
+
+### Module Structure
+- **Auth**: JWT authentication, refresh-token rotation, user registration
+- **Friendships**: Friend request management, status tracking
+- **Sharing**: Privacy settings, visibility logic (enforced on HTTP, WebSocket, and history reads)
+- **Location**: Real-time location updates, WebSocket gateway, history, validation
+- **Messages**: Real-time messaging with read receipts, image attachments, global unread badges + toasts, plus Redis-backed online presence
+- **Trips**: Meetup planning with friend invites (accept/decline), DRAFT → DECIDED → ARCHIVED lifecycle, auto meet-in-the-middle or fixed meetup points (with member proposals), meeting times, arrival tracking, per-trip chat, and a live trip map room
+- **Health**: Service health checks, monitoring endpoints
+- **Throttling**: socket events are rate-limited through Redis (shared by every instance); HTTP routes use the NestJS throttler, kept in memory per instance
+
+### Data Model
+- **User**: email, username, password hash, refresh tokens
+- **Friendship**: requester/addressee + status (PENDING/ACCEPTED)
+- **SharingSettings**: mode = GHOST/EVERYONE/SELECTED/EXCEPT\_SELECTED
+- **SharingListEntry**: owner/friend/listType (SELECTED or EXCEPT)
+- **RefreshToken**: JWT refresh tokens with expiration
+- **LocationHistoryPoint**: Sampled location history with 24-hour retention
+- **Message**: sender/recipient/body (optional)/readAt + `imageUrl` pointing to a volume-stored attachment (PNG/JPEG/GIF/WebP, max 3 MB), indexed for conversation queries; soft-deletes via `deletedAt` with `message:deleted` live propagation
+- **Trip**: name, creator, status (DRAFT/DECIDED/ARCHIVED), meetup mode (AUTO meet-in-the-middle or FIXED point) with optional pending proposal (proposer + point), meeting time, archive timestamp
+- **TripMember**: per-trip role (ADMIN/MEMBER), joinedAt, and `arrivedAt` arrival tracking
+- **TripInvite**: from/to + status (PENDING/ACCEPTED/DECLINED) and respondedAt; membership overrides general sharing on the trip map
+- **TripMessage**: per-trip group chat (sender/body/createdAt) broadcast over the trip room
+
+## Real-time Design
+
+- **Socket.IO Redis Adapter**: Enables horizontal scaling across multiple pods
+- **Room-based Broadcasting**: Each user has personal rooms for targeted updates (`user:{id}` for chat/presence, `location:{id}` for map viewers), plus per-trip rooms (`trip:{id}`) for live trip updates
+- **Trip Rooms**: `trip:join` adds a member to the trip room *and* to every member's `location:{id}` room, so activating a trip on the map streams all members' live positions even when general sharing is off
+- **Visibility Enforcement**: Checked on connect, mode change, list change, and unfriend (details below)
+- **WebSocket Events**: `message:send` / `message:new` / `message:read`, `presence:update` / `presence:snapshot`, and `trip:join` / `trip:joined` / `trip:leave` / `trip:update` / `trip:member-arrived` / `trip:chat` / `trip:chat-new` / `trip:typing`
+- **Presence via Redis**: Online state stored with a 90-second TTL, surfaced as snapshots to friends
+- **Rate Limiting**: Redis-based distributed limits for location updates, messaging, and message reads
+- **Location Validation**: Rejects future (>30s), stale (>5min), out-of-order, and implausible-speed (>500km/h) points
+- **History Sampling**: Stores points ≥30s or ≥25m apart, purged after 24 hours
+
+### How privacy is enforced
+
+A location update is not re-checked against privacy for every viewer. Instead, membership of `location:{id}` **is** the permission: visibility is checked when a viewer joins that room (on connect, for all friends in one batched query), and re-checked whenever it could change. The sharing service emits `sharing.mode-changed` / `sharing.list-changed`, unfriending emits `friendship.removed`, and the location gateway then fetches the sockets in that room across all instances (through the Redis adapter), removes every viewer who is no longer allowed and sends them `location:hidden`; viewers who just became allowed are added and receive the current position. HTTP reads (current locations, history) apply the same `VisibilityService` rules.
+
+Trips are the one explicit exception: accepting a trip invite means sharing with that group, so `trip:join` adds each member to the other members' rooms for the trip map even when general sharing is off.
+
+## Key Decisions
+
+1. **Authorize at room join, revoke on change events** — instead of a check per GPS point. A moving user sends a point every few seconds to many viewers; a database check per point and per viewer would not scale, so a broadcast is a plain room emit. *Trade-off:* correctness depends on every path that can change visibility emitting an event (mode, list, unfriend); the mode-change and unfriend paths have unit tests, and the e2e suite checks stop/resume viewing.
+2. **Redis for live state, PostgreSQL for history.** Current positions and presence are overwritten constantly and only matter now, which suits an in-memory store with TTLs; relations and history need durability. *Trade-off:* Redis is a hard dependency — without it there is no realtime.
+3. **The Socket.IO Redis adapter from day one.** WebSocket connections stick to one process; with the adapter, any number of API pods behave like one. *Trade-off:* every broadcast goes through Redis pub/sub, even with a single instance.
+4. **Keep a sampled history for 24 hours only.** Enough to draw your recent trail; keeping every point forever would be a privacy liability and a write-heavy table. *Trade-off:* no long-term history or analytics.
+5. **Short-lived access tokens with rotating refresh tokens.** A 15-minute access token limits the damage of a leak; refresh tokens (7 days) are stored, rotated on use and revoked on logout. *Trade-off:* the client has to refresh transparently.
+6. **Repository layer with batch queries.** Friend lists drive almost every screen; batching visibility and friendship lookups (`canViewMany`) avoids N+1 queries as lists grow.
+
+## Scaling
+
+The architecture is designed to scale horizontally rather than optimized against a single load target:
+
+- **Stateless API pods**: All live state (current positions, presence) lives in Redis, so any pod can serve any connection
+- **Redis pub/sub**: Socket.IO fan-out + socket-event rate limiting shared across pods (HTTP rate limits are still per pod)
+- **Connection scaling**: Add API replicas as connection counts grow; scale Redis (e.g. cluster mode) when pub/sub volume demands
+- **Database**: Composite indexes on hot query patterns; batch visibility queries keep reads flat as friend lists grow; add PgBouncer or read replicas when contention rises
+- **History growth**: Partition or move sampled history to a time-series store at very large write volumes
+
+## Security Features
+
+- **Refresh Token Flow**: Short-lived access tokens (15min) + long-lived refresh tokens (7 days), rotated and revoked on logout
+- **Helmet Integration**: Security headers for all HTTP responses
+- **Rate Limiting**: auth endpoints per IP (login 3/min, register 5/min, refresh and logout 10/min) and 20 requests/min per route by default; socket events rate-limited via Redis
+- **Environment Validation**: Required secrets are validated at boot; insecure defaults rejected
+- **Non-root Containers**: All containers run as non-root users
+- **Authorization Enforcement**: Friendship-checked on every HTTP, WebSocket, and history read
+- **Image Attachment Validation**: Images are sniffed by magic bytes against an allowlist (PNG/JPEG/GIF/WebP, max 3 MB), so HTML or scripts can't be disguised as attachments. Files are stored on a Docker/Kubernetes volume under random UUID filenames; the database keeps only the URL, never base64. `/uploads/**` requires a login and only serves an image to the sender and the recipient of a message that carries it (anyone else gets a 404, a deleted message takes its photo with it, and responses are `Cache-Control: private`); the web app fetches images with the token and shows them through object URLs.
+
+**Review finding (fixed):** chat photos used to be public at `/uploads/...` to anyone with the URL. They now require a login and a message in common, covered by an e2e test (sender, recipient, a third friend and a deleted message). In Docker, uploads failed with `EACCES` for the non-root user and the demo users were not seeded; both fixed.
+
+## Testing
+
+Both workspaces ship with unit tests (Jest for API, Vitest for web) plus a real end-to-end suite against Postgres + Redis: 109 API unit tests, 21 end-to-end tests and 36 web tests. GitHub Actions runs all of them (the e2e suite against Postgres and a password-protected Redis) on every push.
+
+```bash
+# API unit tests + lint
+cd apps/api
+npm test
+npm run lint
+
+# API end-to-end tests (requires Postgres + Redis, see docker-compose.yml)
+npm run test:e2e
+
+# Web unit tests + build
+cd ../web
+npm run test:unit
+npm run build
+```
+
+**E2E coverage**
+- Full auth flow: register → login → refresh-token rotation → logout revocation
+- Friendship access control (authenticated lists, empty pending inbox)
+- Socket.IO: rejected connections, location broadcast between friends, stop/resume viewing
+- Chat + presence: message delivery between friends with persistence, image-attachment delivery (the image is only served to the two people in the conversation, never anonymously, and disappears with a deleted message), messaging non-friends rejected, online/offline broadcast
+- Trips: full lifecycle (create → invite → accept → chat → meetup → arrive), membership enforcement, fixed meetup + proposal + apply-on-accept, trip chat over sockets, arrival endpoint, and `trip:join` room access
+
+**Unit coverage**
+- Auth service, refresh-token rotation
+- Visibility/authorization logic (all 4 sharing modes)
+- Friendship request handling (duplicates, status transitions)
+- Location validation (stale/future/out-of-order/implausible speed)
+- Location + messages gateways (connection, rate limiting, privacy, read receipts)
+- Presence service (online/offline state, snapshots)
+- Trips service (invite validation, admin-only archive/delete, meetup/proposal rules)
+- Web: API client token handling, Pinia auth/presence/chat stores
+
+## Trade-offs
+
+### Implemented Solutions
+- Socket.IO Redis adapter for horizontal scaling
+- Redis-based distributed rate limiting
+- Complete refresh-token flow
+- Repository pattern for clean data access
+- Kubernetes manifests for production deployment
+- Security hardening (Helmet, rate limiting, env validation, non-root containers)
+- Batch operations to eliminate N+1 queries
+- Health monitoring and observability
+
+### Remaining Enhancements
+- Metrics collection (Prometheus integration planned)
+- Distributed tracing (planned)
+- Redis cluster mode (needed at very high concurrency)
+- Redis-backed storage for the HTTP rate limits (so they are shared across pods like the socket limits)
+
+## Support
+
+For issues or questions:
+- Check the logs (`docker compose logs -f api`, `kubectl logs -f deployment/api`)
+- Open an issue on GitHub for bugs
+
+## Walkthrough
+
+Watch the [Loom walkthrough](https://www.loom.com/share/9f81f4a086174129a44bb644c7677327) to see the app in action.
